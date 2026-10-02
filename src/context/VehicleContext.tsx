@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useMemo } from 'react';
-import type { OBDCommand, VehicleProfile } from '../types/telemetry';
+import type { OBDCommand, VehicleProfile, UploadedCsvFile } from '../types/telemetry';
 import {
   INITIAL_VEHICLE_PROFILES,
   VEHICLE_DEFINITIONS,
@@ -10,6 +10,8 @@ import {
   saveVehicles,
   loadActiveVehicleName,
   saveActiveVehicleName,
+  loadUploadedCsvFiles,
+  saveUploadedCsvFiles,
 } from '../services/storage';
 import { parseAndValidateCSV, type CSVParseResult } from '../services/csvEngine';
 
@@ -24,7 +26,10 @@ interface VehicleContextType {
   setActiveVehicleName: (name: string) => Promise<void>;
   addCustomCommand: (command: Omit<OBDCommand, 'id'>) => Promise<OBDCommand>;
   deleteCommand: (commandId: string) => Promise<void>;
-  importCSVText: (csvText: string) => Promise<CSVParseResult>;
+  uploadedCsvFiles: UploadedCsvFile[];
+  deleteUploadedCsv: (fileId: string) => Promise<void>;
+  deleteAllCustomCommands: (vehicleName?: string) => Promise<void>;
+  importCSVText: (csvText: string, fileName?: string) => Promise<CSVParseResult>;
   resetToDefaults: () => Promise<void>;
 }
 
@@ -34,6 +39,7 @@ export const VehicleProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [vehicles, setVehicles] = useState<VehicleProfile[]>(INITIAL_VEHICLE_PROFILES);
   const [activeVehicleName, setActiveVehicleNameState] = useState<string>('Ford Mustang Mach-E');
   const [selectedYear, setSelectedYearState] = useState<number | 'all'>('all');
+  const [uploadedCsvFiles, setUploadedCsvFiles] = useState<UploadedCsvFile[]>([]);
   const [initialized, setInitialized] = useState(false);
 
   // Initialize from storage on mount
@@ -41,6 +47,7 @@ export const VehicleProvider: React.FC<{ children: React.ReactNode }> = ({ child
     async function init() {
       const storedVehicles = await loadVehicles();
       const storedActive = await loadActiveVehicleName();
+      const storedCsvFiles = await loadUploadedCsvFiles();
 
       let currentVehicles = storedVehicles;
       // If no stored vehicles or if stale previous profiles (e.g. Generic OBD-II, Focus RS), reset to OBDb
@@ -50,6 +57,10 @@ export const VehicleProvider: React.FC<{ children: React.ReactNode }> = ({ child
         await saveVehicles(currentVehicles);
       }
       setVehicles(currentVehicles);
+
+      if (storedCsvFiles && storedCsvFiles.length > 0) {
+        setUploadedCsvFiles(storedCsvFiles);
+      }
 
       const targetActive =
         storedActive && currentVehicles.some((v) => v.name === storedActive)
@@ -130,29 +141,111 @@ export const VehicleProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const deleteCommand = async (commandId: string) => {
+    let deletedCommand: OBDCommand | undefined;
     const updatedVehicles = vehicles.map((v) => {
-      if (v.name === activeVehicleName) {
-        return {
-          ...v,
-          commands: v.commands.filter((c) => c.id !== commandId),
-        };
-      }
-      return v;
+      const found = v.commands.find((c) => c.id === commandId);
+      if (found) deletedCommand = found;
+      return {
+        ...v,
+        commands: v.commands.filter((c) => c.id !== commandId),
+      };
     });
+
+    setVehicles(updatedVehicles);
+    await saveVehicles(updatedVehicles);
+
+    // If this command came from an uploaded CSV file, sync the remaining count
+    if (deletedCommand?.sourceCsvId) {
+      const fileId = deletedCommand.sourceCsvId;
+      const remainingCount = updatedVehicles
+        .flatMap((v) => v.commands)
+        .filter((c) => c.sourceCsvId === fileId).length;
+
+      const updatedCsvFiles = uploadedCsvFiles.map((f) =>
+        f.id === fileId ? { ...f, commandCount: remainingCount } : f
+      );
+      setUploadedCsvFiles(updatedCsvFiles);
+      await saveUploadedCsvFiles(updatedCsvFiles);
+    }
+  };
+
+  const deleteUploadedCsv = async (fileId: string) => {
+    const fileToDelete = uploadedCsvFiles.find((f) => f.id === fileId);
+    if (!fileToDelete) return;
+
+    // 1. Remove all commands associated with this CSV file across all vehicles
+    let updatedVehicles = vehicles.map((v) => ({
+      ...v,
+      commands: v.commands.filter((c) => c.sourceCsvId !== fileId),
+    }));
+
+    // 2. Clean up any custom vehicle profiles created solely for this CSV that now have 0 commands
+    const defaultNames = new Set(VEHICLE_DEFINITIONS.map((d) => d.name));
+    updatedVehicles = updatedVehicles.filter((v) => {
+      if (defaultNames.has(v.name)) return true;
+      return v.commands.length > 0;
+    });
+
+    // 3. Fallback active vehicle if the current active one was removed
+    if (!updatedVehicles.some((v) => v.name === activeVehicleName)) {
+      const fallbackName = updatedVehicles[0]?.name || 'Ford Mustang Mach-E';
+      setActiveVehicleNameState(fallbackName);
+      await saveActiveVehicleName(fallbackName);
+    }
+
+    // 4. Remove CSV file record from storage
+    const remainingCsvFiles = uploadedCsvFiles.filter((f) => f.id !== fileId);
+    setUploadedCsvFiles(remainingCsvFiles);
+    await saveUploadedCsvFiles(remainingCsvFiles);
 
     setVehicles(updatedVehicles);
     await saveVehicles(updatedVehicles);
   };
 
-  const importCSVText = async (csvText: string): Promise<CSVParseResult> => {
-    const result = parseAndValidateCSV(csvText);
+  const deleteAllCustomCommands = async (vehicleName?: string) => {
+    const targetVehicle = vehicleName || activeVehicleName;
+    const updatedVehicles = vehicles.map((v) => {
+      if (v.name === targetVehicle) {
+        return {
+          ...v,
+          commands: v.commands.filter((c) => !c.isCustom),
+        };
+      }
+      return v;
+    });
+
+    // Recalculate commandCount on uploadedCsvFiles
+    const updatedCsvFiles = uploadedCsvFiles.map((f) => {
+      const remainingCount = updatedVehicles
+        .flatMap((v) => v.commands)
+        .filter((c) => c.sourceCsvId === f.id).length;
+      return { ...f, commandCount: remainingCount };
+    });
+
+    setUploadedCsvFiles(updatedCsvFiles);
+    await saveUploadedCsvFiles(updatedCsvFiles);
+    setVehicles(updatedVehicles);
+    await saveVehicles(updatedVehicles);
+  };
+
+  const importCSVText = async (
+    csvText: string,
+    fileName: string = 'custom_commands.csv'
+  ): Promise<CSVParseResult> => {
+    const fileId = `csv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const result = parseAndValidateCSV(csvText, fileId, fileName);
     if (!result.success) {
       return result;
     }
 
     const updatedVehicles = [...vehicles];
+    let totalImported = 0;
+    const affectedVehicles: string[] = [];
 
     for (const [vName, importedCmds] of Object.entries(result.groupedByVehicle)) {
+      affectedVehicles.push(vName);
+      totalImported += importedCmds.length;
+
       const existingVehicleIdx = updatedVehicles.findIndex((v) => v.name === vName);
 
       if (existingVehicleIdx >= 0) {
@@ -179,6 +272,19 @@ export const VehicleProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     }
 
+    const newFileRecord: UploadedCsvFile = {
+      id: fileId,
+      fileName,
+      uploadedAt: Date.now(),
+      rowCount: result.totalRows,
+      commandCount: totalImported,
+      vehicleNames: affectedVehicles,
+    };
+
+    const nextCsvFiles = [newFileRecord, ...uploadedCsvFiles];
+    setUploadedCsvFiles(nextCsvFiles);
+    await saveUploadedCsvFiles(nextCsvFiles);
+
     setVehicles(updatedVehicles);
     await saveVehicles(updatedVehicles);
 
@@ -190,8 +296,10 @@ export const VehicleProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setVehicles(freshProfiles);
     setActiveVehicleNameState('Ford Mustang Mach-E');
     setSelectedYearState('all');
+    setUploadedCsvFiles([]);
     await saveVehicles(freshProfiles);
     await saveActiveVehicleName('Ford Mustang Mach-E');
+    await saveUploadedCsvFiles([]);
   };
 
   return (
@@ -207,6 +315,9 @@ export const VehicleProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setActiveVehicleName,
         addCustomCommand,
         deleteCommand,
+        uploadedCsvFiles,
+        deleteUploadedCsv,
+        deleteAllCustomCommands,
         importCSVText,
         resetToDefaults,
       }}

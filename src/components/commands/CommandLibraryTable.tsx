@@ -31,13 +31,19 @@ export const CommandLibraryTable: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 40;
 
-  // Extract unique categories from commands
+  // Extract unique categories from commands, explicitly prioritizing Custom Commands
   const categories = useMemo(() => {
     const set = new Set<string>();
+    let hasCustom = false;
     for (const cmd of availableCommands) {
-      if (cmd.category) set.add(cmd.category);
+      if (cmd.isCustom) hasCustom = true;
+      if (cmd.category && cmd.category !== 'Custom / CSV') set.add(cmd.category);
     }
-    return ['All', ...Array.from(set).sort()];
+    const list = ['All'];
+    if (hasCustom) {
+      list.push('Custom Commands');
+    }
+    return [...list, ...Array.from(set).sort()];
   }, [availableCommands]);
 
   // Filter commands by search and category
@@ -45,7 +51,11 @@ export const CommandLibraryTable: React.FC = () => {
     const q = searchQuery.trim().toLowerCase();
     return availableCommands.filter((cmd) => {
       const matchesCat =
-        selectedCategory === 'All' || cmd.category === selectedCategory;
+        selectedCategory === 'All'
+          ? true
+          : selectedCategory === 'Custom Commands'
+          ? cmd.isCustom
+          : cmd.category === selectedCategory;
       if (!matchesCat) return false;
 
       if (!q) return true;
@@ -54,7 +64,8 @@ export const CommandLibraryTable: React.FC = () => {
         cmd.id.toLowerCase().includes(q) ||
         cmd.modePid.toLowerCase().includes(q) ||
         (cmd.category && cmd.category.toLowerCase().includes(q)) ||
-        (cmd.units && cmd.units.toLowerCase().includes(q))
+        (cmd.units && cmd.units.toLowerCase().includes(q)) ||
+        (cmd.sourceCsvName && cmd.sourceCsvName.toLowerCase().includes(q))
       );
     });
   }, [availableCommands, searchQuery, selectedCategory]);
@@ -292,8 +303,12 @@ export const CommandLibraryTable: React.FC = () => {
                           <button
                             type="button"
                             className="btn-ghost icon-button-sm btn-delete-cmd"
-                            onClick={() => deleteCommand(cmd.id)}
-                            title="Delete custom command"
+                            onClick={() => {
+                              if (window.confirm(`Delete custom command "${cmd.commandName}"?`)) {
+                                deleteCommand(cmd.id);
+                              }
+                            }}
+                            title={`Delete custom command "${cmd.commandName}"`}
                             aria-label={`Delete ${cmd.commandName}`}
                           >
                             <IconTrash size={14} />

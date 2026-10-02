@@ -66,7 +66,11 @@ function parseCSVRows(csvText: string): string[][] {
  * Validates and ingests a vehicle command CSV file.
  * Completely rejects file if ANY row or header is invalid.
  */
-export function parseAndValidateCSV(csvText: string): CSVParseResult {
+export function parseAndValidateCSV(
+  csvText: string,
+  fileId?: string,
+  fileName?: string
+): CSVParseResult {
   const errors: CSVValidationError[] = [];
   const rawRows = parseCSVRows(csvText);
 
@@ -169,7 +173,9 @@ export function parseAndValidateCSV(csvText: string): CSVParseResult {
         groupedByVehicle[vehicleName] = [];
       }
 
-      const id = `${vehicleName}_${commandName}`.toLowerCase().replace(/[^a-z0-9]/g, '_');
+      const id = fileId
+        ? `csv_${fileId}_${vehicleName}_${commandName}`.toLowerCase().replace(/[^a-z0-9]/g, '_')
+        : `${vehicleName}_${commandName}`.toLowerCase().replace(/[^a-z0-9]/g, '_');
       groupedByVehicle[vehicleName].push({
         id,
         vehicleName,
@@ -181,6 +187,9 @@ export function parseAndValidateCSV(csvText: string): CSVParseResult {
         minVal: isNaN(minVal) ? 0 : minVal,
         maxVal: isNaN(maxVal) ? 100 : maxVal,
         isCustom: true,
+        category: 'Custom / CSV',
+        sourceCsvId: fileId,
+        sourceCsvName: fileName,
       });
     }
   }

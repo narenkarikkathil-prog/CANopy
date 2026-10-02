@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
-import type { BLEConnectionStatus, ATLogEntry } from '../types/ble';
+import type { BLEConnectionStatus, ATLogEntry, ConnectionType } from '../types/ble';
 import type { LiveTelemetryMap, HistoryBufferMap } from '../types/telemetry';
 import { BLEService } from '../services/bleService';
+import { SerialOBDService } from '../services/serialService';
 import { MockBLEService } from '../services/mockBleService';
 import { useVehicle } from './VehicleContext';
 import { useWidgets } from './WidgetContext';
@@ -10,8 +11,12 @@ import { validateCommandSafety } from '../services/obdbParser';
 
 interface BLEContextType {
   status: BLEConnectionStatus;
+  connectionType: ConnectionType;
+  deviceName: string | null;
   isSimulated: boolean;
   setIsSimulated: (simulated: boolean) => void;
+  isBLESupported: boolean;
+  isSerialSupported: boolean;
   atLogs: ATLogEntry[];
   liveValues: LiveTelemetryMap;
   historyBuffers: HistoryBufferMap;
@@ -20,7 +25,11 @@ interface BLEContextType {
   batteryGuardActive: boolean;
   batteryVoltage12V: number | null;
   unsupportedSignals: Set<string>;
-  connect: () => Promise<void>;
+  connect: (mode?: ConnectionType) => Promise<void>;
+  connectBLE: () => Promise<void>;
+  connectClassic: () => Promise<void>;
+  connectUSB: () => Promise<void>;
+  connectSerial: (subMode?: 'classic' | 'usb') => Promise<void>;
   disconnect: () => void;
   quickReconnect: () => Promise<void>;
   sendManualCommand: (cmd: string) => Promise<string>;
@@ -36,6 +45,8 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const { widgets } = useWidgets();
 
   const [status, setStatus] = useState<BLEConnectionStatus>('disconnected');
+  const [connectionType, setConnectionType] = useState<ConnectionType>('ble');
+  const [deviceName, setDeviceName] = useState<string | null>(null);
   const [isSimulated, setIsSimulatedState] = useState<boolean>(false);
   const [atLogs, setAtLogs] = useState<ATLogEntry[]>([]);
   const [liveValues, setLiveValues] = useState<LiveTelemetryMap>({});
@@ -46,12 +57,16 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [unsupportedSignals, setUnsupportedSignals] = useState<Set<string>>(new Set());
 
   const bleServiceRef = useRef<BLEService | null>(null);
+  const serialServiceRef = useRef<SerialOBDService | null>(null);
   const mockServiceRef = useRef<MockBLEService | null>(null);
   const isPollingRef = useRef<boolean>(false);
   const activeHeaderRef = useRef<string>('7E0');
   const availableCommandsRef = useRef(availableCommands);
   availableCommandsRef.current = availableCommands;
   const unsupportedSignalsRef = useRef<Set<string>>(new Set());
+
+  const isBLESupported = typeof navigator !== 'undefined' && 'bluetooth' in navigator;
+  const isSerialSupported = typeof navigator !== 'undefined' && 'serial' in navigator;
 
   const addLog = useCallback((direction: ATLogEntry['direction'], text: string) => {
     const entry: ATLogEntry = {
@@ -73,6 +88,16 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       (entry) => addLog(entry.direction, entry.text),
       () => {
         setStatus('disconnected');
+        setDeviceName(null);
+        isPollingRef.current = false;
+      }
+    );
+
+    serialServiceRef.current = new SerialOBDService(
+      (entry) => addLog(entry.direction, entry.text),
+      () => {
+        setStatus('disconnected');
+        setDeviceName(null);
         isPollingRef.current = false;
       }
     );
@@ -81,6 +106,7 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       (entry) => addLog(entry.direction, entry.text),
       () => {
         setStatus('disconnected');
+        setDeviceName(null);
         isPollingRef.current = false;
       },
       () => availableCommandsRef.current
@@ -88,6 +114,7 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return () => {
       bleServiceRef.current?.disconnect();
+      serialServiceRef.current?.disconnect();
       mockServiceRef.current?.disconnect();
     };
   }, [addLog]);
@@ -98,34 +125,85 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [availableCommands]);
 
   const getActiveService = useCallback(() => {
-    return isSimulated ? mockServiceRef.current : bleServiceRef.current;
-  }, [isSimulated]);
+    if (isSimulated || connectionType === 'simulated') return mockServiceRef.current;
+    if (connectionType === 'serial' || connectionType === 'classic' || connectionType === 'usb') return serialServiceRef.current;
+    return bleServiceRef.current;
+  }, [isSimulated, connectionType]);
 
-  // Connect handler
-  const connect = useCallback(async () => {
-    setStatus('connecting');
-    addLog('info', `Initiating connection (${isSimulated ? 'Simulation' : 'Web Bluetooth'})...`);
+  // Connect handler supporting BLE, Bluetooth Classic (OBDLink MX+), USB Serial, and Simulation
+  const connect = useCallback(
+    async (mode?: ConnectionType) => {
+      const targetMode = isSimulated ? 'simulated' : (mode || connectionType);
+      setConnectionType(targetMode);
+      setStatus('connecting');
 
-    const service = getActiveService();
-    if (!service) return;
+      const isSerialKind = targetMode === 'serial' || targetMode === 'classic' || targetMode === 'usb';
+      const service =
+        targetMode === 'simulated'
+          ? mockServiceRef.current
+          : isSerialKind
+          ? serialServiceRef.current
+          : bleServiceRef.current;
 
-    try {
-      await service.connect();
-      setStatus('connected');
-      addLog('info', 'Connected & ready for live telemetry polling');
-    } catch (err: any) {
-      console.warn('Connection failed:', err);
-      setStatus('disconnected');
-      addLog('error', `Connection error: ${err.message || 'Failed'}`);
-    }
-  }, [getActiveService, isSimulated, addLog]);
+      if (!service) return;
+
+      const label =
+        targetMode === 'classic'
+          ? 'Bluetooth Classic (OBDLink MX+)'
+          : targetMode === 'usb'
+          ? 'USB Diagnostic Cable'
+          : targetMode === 'serial'
+          ? 'Bluetooth Classic / USB Serial'
+          : targetMode === 'simulated'
+          ? 'Simulated BLE Adapter'
+          : 'Bluetooth Low Energy (BLE)';
+
+      addLog('info', `Initiating connection via ${label}...`);
+
+      try {
+        if (isSerialKind && serialServiceRef.current) {
+          const subMode = targetMode === 'classic' ? 'classic' : targetMode === 'usb' ? 'usb' : 'all';
+          await serialServiceRef.current.connect(subMode);
+        } else {
+          await service.connect();
+        }
+        setStatus('connected');
+        const resolvedName =
+          service.getDeviceName() ||
+          (targetMode === 'classic'
+            ? 'OBDLink MX+ (Classic)'
+            : targetMode === 'usb'
+            ? 'USB OBD Cable'
+            : targetMode === 'serial'
+            ? 'OBDLink MX+'
+            : targetMode === 'simulated'
+            ? 'Simulated BLE Adapter'
+            : 'OBD-II Adapter');
+        setDeviceName(resolvedName);
+        addLog('info', `Connected to ${resolvedName}. Telemetry polling active.`);
+      } catch (err: any) {
+        console.warn('Connection failed:', err);
+        setStatus('disconnected');
+        setDeviceName(null);
+        addLog('error', `Connection error: ${err.message || 'Failed'}`);
+      }
+    },
+    [connectionType, isSimulated, addLog]
+  );
+
+  const connectBLE = useCallback(() => connect('ble'), [connect]);
+  const connectClassic = useCallback(() => connect('classic'), [connect]);
+  const connectUSB = useCallback(() => connect('usb'), [connect]);
+  const connectSerial = useCallback((subMode?: 'classic' | 'usb') => connect(subMode || 'serial'), [connect]);
 
   const disconnect = useCallback(() => {
-    const service = getActiveService();
-    service?.disconnect();
+    bleServiceRef.current?.disconnect();
+    serialServiceRef.current?.disconnect();
+    mockServiceRef.current?.disconnect();
     setStatus('disconnected');
+    setDeviceName(null);
     isPollingRef.current = false;
-  }, [getActiveService]);
+  }, []);
 
   const quickReconnect = useCallback(async () => {
     addLog('info', 'Quick-reconnect triggered: restarting initialization sequence...');
@@ -140,8 +218,10 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         await service.runInitSequence();
       }
       setStatus('connected');
+      setDeviceName(service.getDeviceName() || null);
     } catch (err: any) {
       setStatus('disconnected');
+      setDeviceName(null);
       addLog('error', `Quick-reconnect failed: ${err.message}`);
     }
   }, [getActiveService, addLog]);
@@ -149,6 +229,8 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const setIsSimulated = useCallback((sim: boolean) => {
     disconnect();
     setIsSimulatedState(sim);
+    if (sim) setConnectionType('simulated');
+    else setConnectionType('ble');
   }, [disconnect]);
 
   const sendManualCommand = useCallback(
@@ -331,8 +413,12 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     <BLEContext.Provider
       value={{
         status,
+        connectionType,
+        deviceName,
         isSimulated,
         setIsSimulated,
+        isBLESupported,
+        isSerialSupported,
         atLogs,
         liveValues,
         historyBuffers,
@@ -342,6 +428,10 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         batteryVoltage12V,
         unsupportedSignals,
         connect,
+        connectBLE,
+        connectClassic,
+        connectUSB,
+        connectSerial,
         disconnect,
         quickReconnect,
         sendManualCommand,

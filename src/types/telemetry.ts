@@ -21,6 +21,8 @@ export interface OBDCommand {
   minVal: number;
   maxVal: number;
   isCustom?: boolean;
+  sourceCsvId?: string; // Tracks which uploaded CSV file this command came from
+  sourceCsvName?: string; // Original uploaded CSV filename
   category?: string;
   description?: string;
   suggestedMetric?: string;
@@ -29,6 +31,15 @@ export interface OBDCommand {
   pid?: string;
   eax?: string;
   rax?: string;
+}
+
+export interface UploadedCsvFile {
+  id: string;
+  fileName: string;
+  uploadedAt: number;
+  rowCount: number;
+  commandCount: number;
+  vehicleNames: string[];
 }
 
 export interface VehicleProfile {

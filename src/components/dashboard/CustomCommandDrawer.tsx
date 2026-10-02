@@ -1,10 +1,10 @@
 import React from 'react';
 import { useVehicle } from '../../context/VehicleContext';
 import { useBLE } from '../../context/BLEContext';
-import { IconChevronDown, IconChevronUp, IconTerminal } from '@tabler/icons-react';
+import { IconChevronDown, IconChevronUp, IconTerminal, IconTrash } from '@tabler/icons-react';
 
 export const CustomCommandDrawer: React.FC = () => {
-  const { availableCommands, activeVehicleName } = useVehicle();
+  const { availableCommands, activeVehicleName, deleteCommand } = useVehicle();
   const { liveValues, isDrawerOpen, setIsDrawerOpen } = useBLE();
 
   const customCommands = availableCommands.filter((c) => c.isCustom);
@@ -46,6 +46,7 @@ export const CustomCommandDrawer: React.FC = () => {
                     <th>PID</th>
                     <th>Live Value</th>
                     <th>Units</th>
+                    <th className="th-action">Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -65,6 +66,21 @@ export const CustomCommandDrawer: React.FC = () => {
                         <td className="cmd-pid tabular-nums">{cmd.modePid}</td>
                         <td className="cmd-live-val tabular-nums">{formatted}</td>
                         <td className="cmd-units">{cmd.units}</td>
+                        <td className="cmd-action">
+                          <button
+                            type="button"
+                            className="btn-ghost icon-button-sm btn-delete-cmd"
+                            onClick={() => {
+                              if (window.confirm(`Delete custom command "${cmd.commandName}"?`)) {
+                                deleteCommand(cmd.id);
+                              }
+                            }}
+                            title={`Delete custom command "${cmd.commandName}"`}
+                            aria-label={`Delete ${cmd.commandName}`}
+                          >
+                            <IconTrash size={14} />
+                          </button>
+                        </td>
                       </tr>
                     );
                   })}

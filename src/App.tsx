@@ -23,7 +23,7 @@ export const AppContent: React.FC = () => {
         <main className="canopy-content-container">
           {activeTab === 'dashboard' && <DashboardView />}
           {activeTab === 'commands' && <CommandsView />}
-          {activeTab === 'ble' && <BLEConnectionView />}
+          {activeTab === 'ble' && <BLEConnectionView onNavigateToHelp={() => setActiveTab('help')} />}
           {activeTab === 'help' && <HelpView />}
         </main>
       </div>

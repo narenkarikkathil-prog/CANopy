@@ -50,6 +50,16 @@ export const WidgetConfigModal: React.FC<WidgetConfigModalProps> = ({
     widget?.yAxisMax ?? selectedCmd?.maxVal ?? 100
   );
 
+  const categories = React.useMemo(() => {
+    const map = new Map<string, typeof availableCommands>();
+    for (const c of availableCommands) {
+      const cat = c.category || (c.isCustom ? 'Custom Signals' : 'General');
+      if (!map.has(cat)) map.set(cat, []);
+      map.get(cat)!.push(c);
+    }
+    return map;
+  }, [availableCommands]);
+
   if (!isOpen) return null;
 
   const handleSourceChange = (newSourceId: string) => {
@@ -79,16 +89,6 @@ export const WidgetConfigModal: React.FC<WidgetConfigModalProps> = ({
     });
     onClose();
   };
-
-  const categories = React.useMemo(() => {
-    const map = new Map<string, typeof availableCommands>();
-    for (const c of availableCommands) {
-      const cat = c.category || (c.isCustom ? 'Custom Signals' : 'General');
-      if (!map.has(cat)) map.set(cat, []);
-      map.get(cat)!.push(c);
-    }
-    return map;
-  }, [availableCommands]);
 
   return (
     <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title">

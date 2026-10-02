@@ -1,8 +1,8 @@
 import { openDB, type IDBPDatabase } from 'idb';
-import type { VehicleProfile, WidgetConfig } from '../types/telemetry';
+import type { VehicleProfile, WidgetConfig, UploadedCsvFile } from '../types/telemetry';
 
 const DB_NAME = 'canopy_db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbPromise: Promise<IDBPDatabase> | null = null;
 let useLocalStorageFallback = false;
@@ -31,6 +31,9 @@ async function getDB(): Promise<IDBPDatabase | null> {
         }
         if (!db.objectStoreNames.contains('settings')) {
           db.createObjectStore('settings');
+        }
+        if (!db.objectStoreNames.contains('csvFiles')) {
+          db.createObjectStore('csvFiles', { keyPath: 'id' });
         }
       },
     }).catch((err) => {
@@ -160,3 +163,35 @@ export async function saveWidgets(widgets: WidgetConfig[]): Promise<void> {
     console.warn('Failed to save widgets to IndexedDB:', err);
   }
 }
+
+/* Uploaded CSV Files Storage */
+export async function loadUploadedCsvFiles(): Promise<UploadedCsvFile[]> {
+  try {
+    const db = await getDB();
+    if (db && db.objectStoreNames.contains('csvFiles')) {
+      const files = await db.getAll('csvFiles');
+      if (files && files.length > 0) return files;
+    }
+  } catch (err) {
+    console.warn('Failed to load csvFiles from IndexedDB:', err);
+  }
+  return lsGet<UploadedCsvFile[]>('uploaded_csv_files', []);
+}
+
+export async function saveUploadedCsvFiles(files: UploadedCsvFile[]): Promise<void> {
+  lsSet('uploaded_csv_files', files);
+  try {
+    const db = await getDB();
+    if (db && db.objectStoreNames.contains('csvFiles')) {
+      const tx = db.transaction('csvFiles', 'readwrite');
+      await tx.objectStore('csvFiles').clear();
+      for (const f of files) {
+        await tx.objectStore('csvFiles').put(f);
+      }
+      await tx.done;
+    }
+  } catch (err) {
+    console.warn('Failed to save csvFiles to IndexedDB:', err);
+  }
+}
+

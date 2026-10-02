@@ -1,5 +1,14 @@
 import React from 'react';
-import { IconDownload, IconHelpCircle, IconFileSpreadsheet, IconDatabase, IconShieldCheck } from '@tabler/icons-react';
+import {
+  IconDownload,
+  IconHelpCircle,
+  IconFileSpreadsheet,
+  IconBluetooth,
+  IconPlugConnected,
+  IconDeviceUsb,
+  IconDatabase,
+  IconShieldCheck,
+} from '@tabler/icons-react';
 
 export const HelpView: React.FC = () => {
   const handleDownloadTemplate = () => {
@@ -9,7 +18,6 @@ export const HelpView: React.FC = () => {
       'Ford Mustang Mach-E,Vehicle Speed,7E0,010D,A,km/h,0,240',
       'Ford Mustang Mach-E,HV Battery State of Charge,6F5,224801,((A*256)+B)*0.1,%,0,100',
       'Ford Mustang Mach-E,HV Battery Voltage,6F5,22480D,((A*256)+B)*0.1,V,200,500',
-      'Ford Mustang Mach-E,HV Battery Current,6F5,22480B,(signed(A*256+B))*0.1,A,-300,300',
       'Ford Fusion Hybrid,HV Battery Voltage,7E4,224802,((A*256)+B)*0.1,V,200,450',
       'Toyota Highlander,Vehicle Speed,7E0,010D,A,km/h,0,240',
       'Toyota Highlander,Coolant Temperature,7E0,0105,A-40,°C,-40,150',
@@ -29,45 +37,149 @@ export const HelpView: React.FC = () => {
 
   return (
     <div className="help-view-container">
-      {/* Module 4 — Section 1: Step-by-Step BLE Setup Guide */}
+      {/* Module 4 — Section 1: Connection Types & Popular Models Breakdown */}
       <div className="card help-card">
         <div className="help-card-header">
           <IconHelpCircle size={22} className="help-header-icon" />
-          <h2 className="section-title serif-heading">Bluetooth LE Setup Guide</h2>
+          <h2 className="section-title serif-heading">OBD-II Connection Types &amp; Hardware Compatibility</h2>
         </div>
 
         <div className="guide-content">
-          <div className="guide-step-block">
-            <h3 className="guide-step-title">Step 1. Enable Browser Bluetooth Permissions</h3>
-            <p className="guide-text">
-              Web Bluetooth enables direct communication between Canopy and your OBD-II adapter without installing native apps. Follow the specific instructions for your browser:
-            </p>
-            <ul className="guide-instructions-list">
-              <li>
-                <strong>Google Chrome (macOS, Windows, Android)</strong>: Ensure Bluetooth is turned on in your operating system. When clicking "Pair & Connect Adapter", select your OBD adapter from the native permission popup. If the adapter does not appear, ensure <code>chrome://flags/#enable-web-bluetooth-new-permissions-backend</code> is enabled.
-              </li>
-              <li>
-                <strong>Microsoft Edge (Windows, macOS)</strong>: Bluetooth permissions are enabled by default. Select your adapter in the prompt and click Pair.
-              </li>
-              <li>
-                <strong>Apple iOS (iPhone & iPad)</strong>: Apple Safari does not natively support Web Bluetooth. Install the free <strong>Bluefy — Web BLE Browser</strong> from the iOS App Store, open Canopy inside Bluefy, and Bluetooth will connect seamlessly.
-              </li>
-            </ul>
-          </div>
+          <p className="guide-text">
+            Canopy supports virtually all modern OBD-II adapters on the market across 3 connection standards.
+            Choose the connection type that matches your hardware and operating system:
+          </p>
 
-          <div className="guide-step-block">
-            <h3 className="guide-step-title">Step 2. Hardware Connection</h3>
-            <ol className="guide-instructions-list numbered">
-              <li>
-                Locate your vehicle's 16-pin OBD-II port (typically under the dashboard below the steering wheel or behind an access panel).
-              </li>
-              <li>
-                Firmly insert your BLE adapter (ELM327 BLE, Veepeak OBDCheck BLE, Vgate iCar Pro BLE). The adapter's power LED will illuminate.
-              </li>
-              <li>
-                Turn the vehicle ignition to <strong>ON</strong> (Engine running or Accessory II mode). The vehicle's CAN bus must be awake to transmit telemetry.
-              </li>
-            </ol>
+          <div className="connection-types-list">
+            {/* 1. Bluetooth Low Energy (BLE) */}
+            <div className="connection-type-card">
+              <div className="connection-type-header">
+                <div className="conn-icon-box ble-accent">
+                  <IconBluetooth size={22} />
+                </div>
+                <div>
+                  <h3 className="conn-title">1. Bluetooth Low Energy (BLE)</h3>
+                  <span className="conn-subtitle">Universal wireless standard • Direct GATT connection</span>
+                </div>
+                <span className="badge-pill conn-badge-universal">iPhone &amp; Desktop</span>
+              </div>
+
+              <div className="conn-details-body">
+                <div className="conn-section">
+                  <span className="conn-label">Popular Compatible Models:</span>
+                  <ul className="conn-models-list">
+                    <li><strong>OBDLink MX+</strong> <em>(supports BLE mode for iOS and modern platforms)</em></li>
+                    <li><strong>OBDLink CX</strong> <em>(optimized for BimmerCode &amp; standard OBD-II)</em></li>
+                    <li><strong>Veepeak OBDCheck BLE / BLE+</strong></li>
+                    <li><strong>Vgate iCar Pro BLE 4.0</strong></li>
+                    <li><strong>Carista OBD Adapter</strong></li>
+                    <li><strong>LELink 2 / LELink Bluetooth Low Energy</strong></li>
+                    <li><strong>UniCarScan UCSI-2100</strong></li>
+                    <li>Generic ELM327 BLE (Microchip <code>0xFFF0</code>, TI <code>0xFFE0</code>, Nordic UART <code>6E40</code>)</li>
+                  </ul>
+                </div>
+
+                <div className="conn-section">
+                  <span className="conn-label">Platform &amp; Browser Compatibility:</span>
+                  <p className="conn-text">
+                    <strong>Universal:</strong> Supported on <strong>Apple iOS (iPhone &amp; iPad)</strong> via Web BLE browsers (such as the free <em>Bluefy</em> app from the App Store), <strong>Android</strong> (Chrome), and <strong>Desktop</strong> (Chrome &amp; Edge on macOS, Windows, Linux).
+                  </p>
+                </div>
+
+                <div className="conn-section">
+                  <span className="conn-label">How to Connect:</span>
+                  <p className="conn-text">
+                    Plug into your vehicle's OBD-II port, turn ignition to ON, select <strong>BLE</strong> in Canopy's connection toggle, click <strong>Connect</strong>, and pick your adapter in the browser popup. No prior OS Bluetooth settings pairing needed.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* 2. Bluetooth Classic (SPP) */}
+            <div className="connection-type-card">
+              <div className="connection-type-header">
+                <div className="conn-icon-box serial-accent">
+                  <IconPlugConnected size={22} />
+                </div>
+                <div>
+                  <h3 className="conn-title">2. Bluetooth Classic (SPP / RFCOMM)</h3>
+                  <span className="conn-subtitle">High-speed wireless serial • Up to 115,200 baud</span>
+                </div>
+                <span className="badge-pill conn-badge-desktop">Desktop &amp; Android Only</span>
+              </div>
+
+              <div className="conn-details-body">
+                <div className="conn-section">
+                  <span className="conn-label">Popular Compatible Models:</span>
+                  <ul className="conn-models-list">
+                    <li><strong>OBDLink MX+</strong> <em>(high-speed Bluetooth 3.0 Classic SPP mode)</em></li>
+                    <li><strong>OBDLink LX</strong> <em>(Android / Windows classic Bluetooth)</em></li>
+                    <li><strong>vLinker FD+ / MC+</strong> <em>(dual-mode Bluetooth)</em></li>
+                    <li><strong>BAFX Products 34t5</strong> Bluetooth OBD-II reader</li>
+                    <li>Generic Bluetooth 2.1 / 3.0 ELM327 dongles</li>
+                  </ul>
+                </div>
+
+                <div className="conn-section">
+                  <span className="conn-label">Platform &amp; Browser Compatibility:</span>
+                  <p className="conn-text">
+                    Supported on <strong>Google Chrome</strong> and <strong>Microsoft Edge</strong> on macOS, Windows, Linux, and Android via the Web Serial API.
+                    <br />
+                    <span className="ios-warning-text">⚠️ <strong>Not supported on iPhones/iPads:</strong> Apple's iOS restricts web browsers from using Bluetooth Classic SPP serial. On iPhones/iPads, always use <strong>BLE mode</strong>.</span>
+                  </p>
+                </div>
+
+                <div className="conn-section">
+                  <span className="conn-label">How to Connect:</span>
+                  <ol className="conn-steps-list">
+                    <li>Plug the adapter into your vehicle's 16-pin OBD port.</li>
+                    <li>Press the physical <strong>Connect</strong> button on the dongle (e.g. on the OBDLink MX+) until the LED flashes rapidly.</li>
+                    <li>Pair the adapter in your computer or Android phone's OS Bluetooth Settings.</li>
+                    <li>In Canopy, select <strong>Bluetooth</strong>, click <strong>Connect</strong>, and select the paired port in Chrome's serial prompt.</li>
+                  </ol>
+                </div>
+              </div>
+            </div>
+
+            {/* 3. USB Diagnostic Cables */}
+            <div className="connection-type-card">
+              <div className="connection-type-header">
+                <div className="conn-icon-box usb-accent">
+                  <IconDeviceUsb size={22} />
+                </div>
+                <div>
+                  <h3 className="conn-title">3. USB Serial Diagnostic Cables</h3>
+                  <span className="conn-subtitle">Direct wired connection • Zero latency • High data rates</span>
+                </div>
+                <span className="badge-pill conn-badge-desktop">Desktop Only</span>
+              </div>
+
+              <div className="conn-details-body">
+                <div className="conn-section">
+                  <span className="conn-label">Popular Compatible Models:</span>
+                  <ul className="conn-models-list">
+                    <li><strong>OBDLink EX</strong> <em>(high-speed USB adapter recommended for Ford / FORScan)</em></li>
+                    <li><strong>OBDLink SX</strong> <em>(standard USB diagnostic tool)</em></li>
+                    <li><strong>ScanTool OBDLink</strong> USB series</li>
+                    <li>Generic FTDI (FT232R), CH340, Prolific PL2303, CP2102 USB-to-OBD cables</li>
+                  </ul>
+                </div>
+
+                <div className="conn-section">
+                  <span className="conn-label">Platform &amp; Browser Compatibility:</span>
+                  <p className="conn-text">
+                    Supported on <strong>macOS, Windows, and Linux</strong> using Google Chrome, Microsoft Edge, or Opera. <em>Not supported on mobile browsers or iPhones.</em>
+                  </p>
+                </div>
+
+                <div className="conn-section">
+                  <span className="conn-label">How to Connect:</span>
+                  <p className="conn-text">
+                    Connect the USB cable to your laptop and vehicle. Select <strong>USB</strong> in Canopy, click <strong>Connect</strong>, and select the USB Serial / COM port in the browser prompt.
+                  </p>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="guide-step-block">

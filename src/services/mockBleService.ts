@@ -33,6 +33,10 @@ export class MockBLEService {
     return this.connected;
   }
 
+  public getDeviceName(): string {
+    return 'Simulated BLE Adapter';
+  }
+
   public async connect(): Promise<void> {
     this.log('info', '[Simulator] Connecting to Simulated ELM327 v1.5 BLE Adapter...');
     await new Promise((r) => setTimeout(r, 350));

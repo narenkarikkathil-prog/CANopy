@@ -100,13 +100,16 @@ export const DashboardView: React.FC = () => {
       </div>
 
       {/* Widget Config Modal */}
-      <WidgetConfigModal
-        isOpen={modalOpen}
-        widget={editingWidget}
-        slotIndex={selectedSlotIndex}
-        onClose={() => setModalOpen(false)}
-        onSave={handleSaveWidget}
-      />
+      {modalOpen && (
+        <WidgetConfigModal
+          key={editingWidget ? `edit-${editingWidget.id}` : `add-slot-${selectedSlotIndex}`}
+          isOpen={modalOpen}
+          widget={editingWidget}
+          slotIndex={selectedSlotIndex}
+          onClose={() => setModalOpen(false)}
+          onSave={handleSaveWidget}
+        />
+      )}
     </div>
   );
 };
