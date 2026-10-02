@@ -1,4 +1,4 @@
-# Canopy 🏎️⚡
+# Canopy 
 
 > **Modern Web-Native OBD-II & CAN Bus Telemetry Dashboard**  
 > Connect wirelessly via Bluetooth Low Energy (BLE), Bluetooth Classic (SPP), or USB diagnostic cables directly in your browser. Powered by the open-source [OBDb](https://github.com/OBDb) vehicle signal database.
@@ -15,13 +15,13 @@ Whether you drive a modern electric vehicle (such as a Ford Mustang Mach-E), a h
 
 ## Key Features
 
-### 📡 Multi-Standard Hardware Connectivity
+###  Multi-Standard Hardware Connectivity
 - **Bluetooth Low Energy (BLE)**: Universal wireless connection via Web Bluetooth. Compatible with iPhones and iPads using Web BLE browsers (such as [Bluefy](https://apps.apple.com/app/bluefy-web-ble-browser/id1492822055)), as well as desktop Chrome and Edge.
 - **Bluetooth Classic (SPP / RFCOMM)**: High-speed serial connection (up to 115,200 baud) for adapters like the OBDLink MX+, OBDLink LX, and vLinker on macOS, Windows, Linux, and Android.
 - **USB Serial Cables**: Direct wired diagnostic cables (OBDLink EX/SX, FTDI FT232R, CH340, Prolific) with zero wireless latency.
 - **Offline Adapter Simulation**: Built-in dynamic ELM327 BLE simulator that generates plausible live CAN responses for any vehicle profile without needing physical hardware.
 
-### 🚗 Vehicle Profiles & OBDb Signalsets
+###  Vehicle Profiles & OBDb Signalsets
 - Pre-bundled profiles directly sourced from the open-source **OBDb Community Database**:
   - **Ford Mustang Mach-E**: High-voltage battery pack voltage/current, state of charge (SOC), cell temperatures, motor speeds, and thermal telemetry.
   - **Ford Fusion Hybrid & Energi**: Hybrid battery state of charge, module voltages, generator speeds, and drive modes.
@@ -29,13 +29,13 @@ Whether you drive a modern electric vehicle (such as a Ford Mustang Mach-E), a h
   - **SAE J1979 Standard OBD-II**: Universal Mode 01 parameters (RPM, vehicle speed, coolant temp, intake air temp, throttle position, etc.).
 - Multi-year filtering and profile switching directly from the top navigation bar.
 
-### 📊 Customizable Dashboard & Live Widgets
+### Customizable Dashboard & Live Widgets
 - **Gauges & Dials**: Circular indicators with min/max bounds and live value updates.
 - **Time-Series Charts**: 60-second rolling trend charts for dynamic parameters (RPM, speed, battery current).
 - **Stat Cards & Data Tables**: Compact overview cards and full signal tables.
 - **Widget Customization**: Add, remove, rearrange, and bind widgets to any available vehicle signal.
 
-### 🛠️ Command Library & Custom PID Builder
+### Command Library & Custom PID Builder
 - Browse hundreds of Mode 01, Mode 21, and Mode 22 (UDS ReadDataByIdentifier) signals.
 - **Custom Command Creator**: Define custom PIDs with custom CAN request headers (e.g. `7E0`, `6F5`), custom formulas (`((A*256)+B)/4`), signed two's-complement handling (`signed(...)`), and custom units.
 - Delete custom commands directly from the library.
@@ -45,12 +45,12 @@ Whether you drive a modern electric vehicle (such as a Ford Mustang Mach-E), a h
 - Includes strict schema validation, formula syntax testing, and an instant template download.
 - Export vehicle command catalogs for backup or sharing with the OBDb community.
 
-### 💻 Live AT Diagnostic Console
+###  Live AT Diagnostic Console
 - Real-time logging of all raw `TX` (transmitted) and `RX` (received) ELM327 frames.
 - Protocol step-by-step initialization sequence inspection (`AT Z` → `AT E0` → `AT SP 6` → `AT H1`).
 - Manual command prompt for testing direct query responses.
 
-### 🛡️ Safety Architecture & 12V Battery Guard
+###  Safety Architecture & 12V Battery Guard
 - **Strict Read-Only Allowlist**: Commands that write to flash memory, reset ECUs, clear DTCs, or actuate relays (e.g. UDS modes `0x2E`, `0x2F`, `0x31`, `0x10`, `0x14`) are strictly blocked at the transport layer.
 - **12V Auxiliary Battery Guard**: Continuously checks 12V system voltage (`AT RV`) and pauses polling if voltage drops below 11.8V to protect auxiliary batteries from parasitic drain.
 
