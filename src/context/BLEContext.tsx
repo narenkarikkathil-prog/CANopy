@@ -108,7 +108,8 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const capabilitiesRef = useRef<AdapterCapabilities | null>(null);
 
   const isPollingRef = useRef<boolean>(false);
-  const activeHeaderRef = useRef<string>('7E0');
+  const activeHeaderRef = useRef<string | null>(null);
+  const pollRunRef = useRef<number>(0);
   const availableCommandsRef = useRef(availableCommands);
   availableCommandsRef.current = availableCommands;
   const unsupportedSignalsRef = useRef<Set<string>>(new Set());
@@ -147,6 +148,12 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setStatus('disconnected');
         setDeviceName(null);
         isPollingRef.current = false;
+      },
+      (name, caps) => {
+        capabilitiesRef.current = caps;
+        setStatus('connected');
+        setDeviceName(name);
+        addLog('info', `[Auto-Reconnect] Connected to ${name}. Telemetry polling active.`);
       }
     );
 
@@ -162,7 +169,7 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return () => {
       bleServiceRef.current?.disconnect();
-      serialServiceRef.current?.disconnect();
+      serialServiceRef.current?.destroy();
       mockServiceRef.current?.disconnect();
     };
   }, [addLog]);
@@ -209,7 +216,7 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       try {
         let caps: AdapterCapabilities | null = null;
-        const profileProto = activeVehicle?.protocol || '6';
+        const profileProto = activeVehicle?.protocol || undefined;
 
         if (isSerialKind && serialServiceRef.current) {
           const subMode = targetMode === 'classic' ? 'classic' : targetMode === 'usb' ? 'usb' : 'all';
@@ -244,6 +251,11 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setStatus('disconnected');
         setDeviceName(null);
         addLog('error', `Connection error: ${err.message || 'Failed'}`);
+        if (isSerialKind) {
+          try {
+            await serialServiceRef.current?.disconnect();
+          } catch {}
+        }
       }
     },
     [connectionType, isSimulated, activeVehicle, addLog]
@@ -281,13 +293,17 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!service) return;
 
     try {
-      const profileProto = activeVehicle?.protocol || '6';
-      if (!service.isConnected()) {
+      const profileProto = activeVehicle?.protocol || undefined;
+      let caps: AdapterCapabilities | null = null;
+      if (service instanceof SerialOBDService) {
+        caps = await service.reconnect(profileProto);
+      } else if (!service.isConnected()) {
         await (service as any).connect(profileProto);
+        caps = (service as any).getCapabilities ? (service as any).getCapabilities() : null;
       } else {
-        const caps = await (service as any).runInitSequence(profileProto);
-        if (caps) capabilitiesRef.current = caps;
+        caps = await (service as any).runInitSequence(profileProto);
       }
+      if (caps) capabilitiesRef.current = caps;
       setStatus('connected');
       setDeviceName(service.getDeviceName() || null);
     } catch (err: any) {
@@ -370,30 +386,41 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const pollLoop = async () => {
+      const runId = ++pollRunRef.current;
+      activeHeaderRef.current = null;
       const service = getActiveService();
       let loopCounter = 0;
       let batchingSupported = true;
+      let consecutiveTimeouts = 0;
 
-      while (!cancel && isPollingRef.current && service?.isConnected()) {
+      while (!cancel && runId === pollRunRef.current && isPollingRef.current && service?.isConnected()) {
         loopCounter++;
 
         // 1. Battery Guard: Check 12V voltage every 20 cycles
         if (loopCounter % 20 === 1) {
           try {
             const rvResp = await service.sendCommand('AT RV', 1200);
+            if (cancel || runId !== pollRunRef.current) break;
             const voltsMatch = rvResp.match(/([0-9.]+)\s*V/i);
             if (voltsMatch) {
               const volts = parseFloat(voltsMatch[1]);
-              setBatteryVoltage12V(volts);
+              if (!isNaN(volts) && volts > 0) {
+                setBatteryVoltage12V(volts);
 
-              // Low 12V voltage guard (< 11.8V indicates weak battery or ignition OFF)
-              if (volts > 0 && volts < 11.8) {
-                setBatteryGuardActive(true);
-                addLog('info', `[Battery Guard] 12V battery is low (${volts}V). Pausing polling to protect battery.`);
-                await new Promise((r) => setTimeout(r, 10000));
-                continue;
+                // Low 12V voltage guard (< 11.8V indicates weak battery or ignition OFF)
+                if (volts < 11.8) {
+                  setBatteryGuardActive(true);
+                  addLog('info', `[Battery Guard] 12V battery is low (${volts}V). Pausing polling to protect battery.`);
+                  loopCounter = 0; // Recheck in the very next loop cycle
+                  await new Promise((r) => setTimeout(r, 10000));
+                  if (cancel || runId !== pollRunRef.current) break;
+                  continue;
+                } else {
+                  setBatteryGuardActive(false);
+                }
               } else {
-                setBatteryGuardActive(false);
+                // 0V or invalid reading -> treat as no valid reading
+                setBatteryVoltage12V(null);
               }
             }
           } catch {
@@ -411,6 +438,7 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (dueCommands.length === 0) {
           // If no slow signals are due, pick one fast command or sleep briefly
           await new Promise((r) => setTimeout(r, 20));
+          if (cancel || runId !== pollRunRef.current) break;
           continue;
         }
 
@@ -430,13 +458,21 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const batchedWireCmd = `01 ${pidsOnly.join(' ')}${supportsCount ? ' 1' : ''}`;
 
           try {
-            // Ensure header is standard 7E0
+            // Ensure header is standard 7E0 and reset/set matching CRA filter
             if (activeHeaderRef.current !== '7E0') {
               await service.sendCommand('AT SH 7E0', 1000);
+              if (cancel || runId !== pollRunRef.current) break;
               activeHeaderRef.current = '7E0';
+              if (caps?.supportsCRA && !caps.unsupportedCommands.has('AT CRA')) {
+                try {
+                  await service.sendCommand('AT CRA 7E8', 800);
+                } catch {}
+              }
             }
 
             const batchResp = await service.sendCommand(batchedWireCmd, 1500);
+            if (cancel || runId !== pollRunRef.current) break;
+            consecutiveTimeouts = 0;
 
             if (isUnsupportedResponse(batchResp) || batchResp.includes('?')) {
               // Adapter or ECU rejected batch query -> revert to single PIDs
@@ -481,36 +517,64 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 }
               }
             }
-          } catch {
+          } catch (batchErr: any) {
             batchingSupported = false;
+            if (batchErr.message && batchErr.message.includes('Timeout')) {
+              consecutiveTimeouts++;
+              if (consecutiveTimeouts >= 3) {
+                addLog('info', '[Polling] 3 consecutive timeouts. Running re-sync (\\r)...');
+                try {
+                  await service.sendCommand('\r', 1000);
+                  consecutiveTimeouts = 0;
+                  addLog('info', '[Polling] Re-sync successful.');
+                } catch {
+                  addLog('error', '[Polling] Re-sync failed after 3 timeouts. Connection lost.');
+                  if (typeof (service as any).handleLost === 'function') {
+                    await (service as any).handleLost('3 consecutive command timeouts and re-sync failed');
+                  } else {
+                    disconnect();
+                  }
+                  break;
+                }
+              }
+            }
           }
         }
 
         // 4. Poll remaining individual commands
         for (const cmd of dueCommands) {
-          if (cancel || !isPollingRef.current || !service.isConnected()) break;
+          if (cancel || runId !== pollRunRef.current || !isPollingRef.current || !service.isConnected()) break;
           if (batchedHandledIds.has(cmd.id)) continue;
           if (unsupportedSignalsRef.current.has(cmd.id)) continue;
 
           try {
             // Header management (cache active header; only send AT SH when it changes)
-            if (cmd.header && cmd.header !== activeHeaderRef.current) {
-              await service.sendCommand(`AT SH ${cmd.header}`, 1000);
-              activeHeaderRef.current = cmd.header;
+            const targetHeader = cmd.header || '7E0';
+            if (targetHeader !== activeHeaderRef.current) {
+              await service.sendCommand(`AT SH ${targetHeader}`, 1000);
+              if (cancel || runId !== pollRunRef.current) break;
+              activeHeaderRef.current = targetHeader;
 
-              // Optional AT CRA filter for STN adapters
-              if (caps?.supportsCRA && !caps.unsupportedCommands.has('AT CRA') && cmd.header.length === 3) {
-                const reqNum = parseInt(cmd.header, 16);
-                if (!isNaN(reqNum)) {
-                  const respNum = (reqNum + 8).toString(16).toUpperCase();
-                  try {
-                    const craResp = await service.sendCommand(`AT CRA ${respNum}`, 800);
-                    if (craResp.includes('?')) {
+              // AT CRA filter reset or assignment whenever header changes
+              if (caps?.supportsCRA && !caps.unsupportedCommands.has('AT CRA')) {
+                if (targetHeader.length === 3) {
+                  const reqNum = parseInt(targetHeader, 16);
+                  if (!isNaN(reqNum)) {
+                    const respNum = (reqNum + 8).toString(16).toUpperCase();
+                    try {
+                      const craResp = await service.sendCommand(`AT CRA ${respNum}`, 800);
+                      if (craResp.includes('?')) {
+                        caps.unsupportedCommands.add('AT CRA');
+                      }
+                    } catch {
                       caps.unsupportedCommands.add('AT CRA');
                     }
-                  } catch {
-                    caps.unsupportedCommands.add('AT CRA');
                   }
+                } else {
+                  // Reset filter for broadcast/variable header
+                  try {
+                    await service.sendCommand('AT CRA', 800);
+                  } catch {}
                 }
               }
             }
@@ -518,6 +582,7 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             // Construct wire command with single response-count optimization if supported
             let wireCmd = formatWireCommand(cmd.modePid, caps ? caps.supportsResponseCount : true);
             let response = await service.sendCommand(wireCmd, 1500);
+            if (cancel || runId !== pollRunRef.current) break;
 
             // Clone tolerance: if adapter returned '?', disable response count and retry
             if (response.includes('?') && wireCmd !== cmd.modePid) {
@@ -525,7 +590,11 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               addLog('info', '[Clone Notice] Trailing response count not supported, using standard format.');
               wireCmd = cmd.modePid;
               response = await service.sendCommand(wireCmd, 1500);
+              if (cancel || runId !== pollRunRef.current) break;
             }
+
+            // Reset consecutive timeouts on success
+            consecutiveTimeouts = 0;
 
             // Check if vehicle ECU does not support this signal (NO DATA / 7F negative response)
             if (isUnsupportedResponse(response)) {
@@ -542,16 +611,35 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
           } catch (err: any) {
             if (err.message && err.message.includes('Timeout')) {
-              console.warn(`Polling timeout on ${cmd.commandName}:`, err.message);
+              consecutiveTimeouts++;
+              console.warn(`Polling timeout on ${cmd.commandName} (${consecutiveTimeouts}/3):`, err.message);
+              if (consecutiveTimeouts >= 3) {
+                addLog('info', '[Polling] 3 consecutive timeouts. Running re-sync (\\r)...');
+                try {
+                  await service.sendCommand('\r', 1000);
+                  consecutiveTimeouts = 0;
+                  addLog('info', '[Polling] Re-sync successful.');
+                } catch {
+                  addLog('error', '[Polling] Re-sync failed after 3 timeouts. Connection lost.');
+                  if (typeof (service as any).handleLost === 'function') {
+                    await (service as any).handleLost('3 consecutive command timeouts and re-sync failed');
+                  } else {
+                    disconnect();
+                  }
+                  break;
+                }
+              }
             }
           }
 
           // Small prompt-driven inter-command pause (12ms) for CAN bus arbitration
           await new Promise((r) => setTimeout(r, 12));
+          if (cancel || runId !== pollRunRef.current) break;
         }
 
         // Small pause before next cycle
         await new Promise((r) => setTimeout(r, 15));
+        if (cancel || runId !== pollRunRef.current) break;
       }
     };
 

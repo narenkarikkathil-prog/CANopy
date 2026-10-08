@@ -9,6 +9,7 @@ export interface OBDTransport {
   log(direction: 'tx' | 'rx' | 'info' | 'error', text: string): void;
   flush(): void;
   isConnected(): boolean;
+  handleLost?: (reason: string) => Promise<void>;
 }
 
 export interface AdapterCapabilities {
@@ -54,39 +55,29 @@ export async function executeAdapterInit(
   stageTimings['stabilization'] = Math.round(performance.now() - tStabStart);
 
   // -------------------------------------------------------------
-  // 2. Fast Sync: Bare \r with 400ms timeout & up to 4 retries
+  // 2. Fast Sync: Progressive timeouts (total ~8s)
   // -------------------------------------------------------------
   const tSyncStart = performance.now();
   let synced = false;
   let syncAttempts = 0;
 
-  for (let i = 1; i <= 4; i++) {
-    syncAttempts = i;
+  const syncTimeouts = [400, 600, 1000, 1500, 2000, 2500];
+  for (let i = 0; i < syncTimeouts.length && !synced; i++) {
+    syncAttempts = i + 1;
     try {
       transport.log('tx', '\\r');
-      const resp = await transport.send('\r', 400);
+      const resp = await transport.send('\r', syncTimeouts[i]);
       transport.log('rx', resp || '>');
-      // Any response or prompt confirms the UART/BLE link is alive
       synced = true;
       break;
     } catch {
-      // Retry sync pulse
       transport.flush();
     }
   }
 
-  // If initial sync attempts failed, try a double \r wake pulse before giving up
   if (!synced) {
-    transport.log('info', 'Sync attempts unacknowledged. Sending wake pulse (\\r\\r)...');
-    try {
-      transport.log('tx', '\\r\\r');
-      const resp = await transport.send('\r\r', 500);
-      transport.log('rx', resp || '>');
-      synced = true;
-    } catch (e: any) {
-      transport.log('error', `Sync failed: ${e.message}`);
-      throw new Error(`Adapter failed to respond to sync probe: ${e.message}`);
-    }
+    transport.log('error', 'Adapter failed to respond to sync probe');
+    throw new Error('Adapter failed to respond to sync probe');
   }
 
   stageTimings['sync'] = Math.round(performance.now() - tSyncStart);

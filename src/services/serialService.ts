@@ -6,7 +6,7 @@ export type SerialLogCallback = (entry: Omit<ATLogEntry, 'id' | 'timestamp'>) =>
 
 /**
  * SerialOBDService
- * Implements prompt-driven communication over the Web Serial API (Chrome 117+ on Mac, Windows, Linux, Android).
+ * Implements robust, queue-serialized, prompt-driven communication over the Web Serial API.
  * Supports:
  * - OBDLink MX+ (Bluetooth 3.0 Classic SPP / RFCOMM)
  * - OBDLink LX, OBDLink EX (USB), vLinker FD+ / MC+
@@ -29,11 +29,69 @@ export class SerialOBDService implements OBDTransport {
 
   private onLog: SerialLogCallback | null = null;
   private onDisconnectCallback: (() => void) | null = null;
+  private onConnectCallback: ((deviceName: string, caps: AdapterCapabilities) => void) | null = null;
 
-  constructor(onLog?: SerialLogCallback, onDisconnect?: () => void) {
+  // P4 queue & dirty flag
+  private queue: Promise<unknown> = Promise.resolve();
+  private dirty = false; // last command timed out; a late '>' may still arrive
+
+  // P6 & P7 state
+  private lastUsedPort: any = null;
+  private lastProfileProtocol?: string;
+  private userRequestedDisconnect = false;
+  private autoReconnectAttempts = 0;
+  private autoReconnectTimer: any = null;
+  private enableSignals = false; // Opt-in DTR/RTS control signals
+
+  constructor(
+    onLog?: SerialLogCallback,
+    onDisconnect?: () => void,
+    onConnect?: (deviceName: string, caps: AdapterCapabilities) => void
+  ) {
     if (onLog) this.onLog = onLog;
     if (onDisconnect) this.onDisconnectCallback = onDisconnect;
+    if (onConnect) this.onConnectCallback = onConnect;
+
+    if (typeof navigator !== 'undefined' && 'serial' in navigator) {
+      const serialNav = (navigator as any).serial;
+      serialNav.addEventListener('disconnect', this.handleSerialDisconnectEvent);
+      serialNav.addEventListener('connect', this.handleSerialConnectEvent);
+    }
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', this.handlePageUnload);
+      window.addEventListener('pagehide', this.handlePageUnload);
+    }
   }
+
+  private handleSerialDisconnectEvent = (e: any) => {
+    const info = e.target?.getInfo ? e.target.getInfo() : {};
+    this.log(
+      'info',
+      `[Serial Hardware Disconnect] Device detached (VID: 0x${(info.usbVendorId || 0).toString(16).toUpperCase()})`
+    );
+    if (e.target === this.port) {
+      this.handleLost('Device disconnected');
+    }
+  };
+
+  private handleSerialConnectEvent = (e: any) => {
+    const info = e.target?.getInfo ? e.target.getInfo() : {};
+    this.log(
+      'info',
+      `[Serial Hardware Connect] Device attached (VID: 0x${(info.usbVendorId || 0).toString(16).toUpperCase()} PID: 0x${(info.usbProductId || 0).toString(16).toUpperCase()})`
+    );
+  };
+
+  private handlePageUnload = () => {
+    this.userRequestedDisconnect = true;
+    this.keepReading = false;
+    if (this.port) {
+      try {
+        this.port.close();
+      } catch {}
+    }
+  };
 
   public isSupported(): boolean {
     return typeof navigator !== 'undefined' && 'serial' in navigator;
@@ -60,6 +118,14 @@ export class SerialOBDService implements OBDTransport {
       return `USB OBD Adapter (VID: 0x${info.usbVendorId.toString(16).toUpperCase()})`;
     }
     return 'OBDLink MX+ / Serial OBD-II Adapter';
+  }
+
+  public setEnableSignals(enable: boolean): void {
+    this.enableSignals = enable;
+  }
+
+  public setOnConnect(callback: (deviceName: string, caps: AdapterCapabilities) => void): void {
+    this.onConnectCallback = callback;
   }
 
   /**
@@ -97,6 +163,40 @@ export class SerialOBDService implements OBDTransport {
     return count;
   }
 
+  private getCachedBaud(info: any): number | null {
+    if (typeof localStorage === 'undefined') return null;
+    if (info?.usbVendorId) {
+      const key = `obd_baud_${info.usbVendorId}_${info.usbProductId || '0'}`;
+      const saved = localStorage.getItem(key);
+      if (saved) {
+        const val = parseInt(saved, 10);
+        if (!isNaN(val) && val > 0) return val;
+      }
+    }
+    return null;
+  }
+
+  private setCachedBaud(info: any, baud: number): void {
+    if (typeof localStorage === 'undefined') return;
+    if (info?.usbVendorId) {
+      const key = `obd_baud_${info.usbVendorId}_${info.usbProductId || '0'}`;
+      localStorage.setItem(key, String(baud));
+    }
+  }
+
+  private saveLastDevice(port: any): void {
+    if (typeof localStorage === 'undefined' || !port) return;
+    const info = port.getInfo ? port.getInfo() : {};
+    localStorage.setItem(
+      'obd_last_device',
+      JSON.stringify({
+        usbVendorId: info.usbVendorId,
+        usbProductId: info.usbProductId,
+        bluetoothServiceClassId: info.bluetoothServiceClassId,
+      })
+    );
+  }
+
   /**
    * Connect to an OBD adapter via Web Serial.
    */
@@ -112,31 +212,57 @@ export class SerialOBDService implements OBDTransport {
       );
     }
 
+    // P1: Never leave the port open or locked after a failure
+    if (this.port) {
+      await this.teardownPort();
+    }
+
+    this.userRequestedDisconnect = false;
+    this.autoReconnectAttempts = 0;
+    if (this.autoReconnectTimer) {
+      clearTimeout(this.autoReconnectTimer);
+      this.autoReconnectTimer = null;
+    }
+
     const serialNav = (navigator as any).serial;
 
-    // Check if we can reuse an already authorized serial port without re-opening the chooser
+    // P7: Reuse a saved port ONLY if getInfo() matches the last successful connection
     if (!forceNewDevice) {
       const authorizedPorts = await this.getAuthorizedPorts();
-      // Filter for connected ports if supported by modern Chromium (port.connected !== false)
       const connectedPorts = authorizedPorts.filter((p: any) => p.connected !== false);
-      if (connectedPorts.length > 0) {
-        const candidate = connectedPorts[connectedPorts.length - 1];
-        this.log('info', 'Connecting to previously authorized serial port...');
-        this.port = candidate;
+      const lastDeviceStr = typeof localStorage !== 'undefined' ? localStorage.getItem('obd_last_device') : null;
+
+      if (lastDeviceStr && connectedPorts.length > 0) {
         try {
-          return await this.openPort(targetBaudRate, profileProtocol);
-        } catch (openErr: any) {
-          this.log(
-            'info',
-            `Saved serial port could not be opened (${openErr.message}). Prompting for device selection...`
-          );
-          this.port = null;
-        }
-      } else if (authorizedPorts.length > 0) {
-        this.log(
-          'info',
-          'Previously saved serial port is reported disconnected by OS. Prompting for device selection...'
-        );
+          const lastDevice = JSON.parse(lastDeviceStr);
+          const candidate = connectedPorts.find((p: any) => {
+            const info = p.getInfo ? p.getInfo() : {};
+            if (
+              lastDevice.bluetoothServiceClassId &&
+              info.bluetoothServiceClassId === lastDevice.bluetoothServiceClassId
+            ) {
+              return true;
+            }
+            if (lastDevice.usbVendorId && info.usbVendorId === lastDevice.usbVendorId) {
+              return !lastDevice.usbProductId || info.usbProductId === lastDevice.usbProductId;
+            }
+            return false;
+          });
+
+          if (candidate) {
+            this.log('info', 'Connecting to last-used serial device...');
+            this.port = candidate;
+            try {
+              return await this.openPort(targetBaudRate, profileProtocol);
+            } catch (openErr: any) {
+              this.log(
+                'info',
+                `Last-used serial device could not be opened (${openErr.message}). Prompting for device selection...`
+              );
+              await this.teardownPort();
+            }
+          }
+        } catch {}
       }
     }
 
@@ -174,75 +300,191 @@ export class SerialOBDService implements OBDTransport {
     return await this.openPort(targetBaudRate, profileProtocol);
   }
 
+  /**
+   * Opens the port with baud-rate fallback for USB adapters and error wrapping.
+   */
   private async openPort(targetBaudRate: number, profileProtocol?: string): Promise<AdapterCapabilities> {
-    this.log('info', `Opening serial communication link at ${targetBaudRate} baud...`);
-
-    // Guard against calling open() on an already open port
-    if (!this.port.readable) {
-      try {
-        await this.port.open({
-          baudRate: targetBaudRate,
-          dataBits: 8,
-          stopBits: 1,
-          parity: 'none',
-          bufferSize: 8192,
-        });
-      } catch (openErr: any) {
-        throw new Error(`Failed to open serial port: ${openErr.message}`);
-      }
-    }
-
-    // Assert DTR / RTS control signals if supported
     try {
-      if (typeof this.port.setSignals === 'function') {
-        await this.port.setSignals({ dataTerminalReady: true, requestToSend: true });
+      const info = this.port.getInfo ? this.port.getInfo() : {};
+      const isBluetooth = !!info.bluetoothServiceClassId;
+
+      if (isBluetooth) {
+        this.log('info', `[Serial Port Open] Opening Bluetooth Classic port at ${targetBaudRate} baud...`);
+        if (!this.port.readable) {
+          await this.port.open({
+            baudRate: targetBaudRate,
+            dataBits: 8,
+            stopBits: 1,
+            parity: 'none',
+            bufferSize: 8192,
+          });
+        }
+        if (this.enableSignals && typeof this.port.setSignals === 'function') {
+          try {
+            await this.port.setSignals({ dataTerminalReady: true, requestToSend: true });
+          } catch {}
+        }
+        this.keepReading = true;
+        this.readPromise = this.readLoop();
+        this.log('info', '[Serial] Bluetooth link established. Running initialization sequence...');
+        const caps = await this.runInitSequence(profileProtocol);
+        this.lastUsedPort = this.port;
+        this.lastProfileProtocol = profileProtocol;
+        this.saveLastDevice(this.port);
+        return caps;
       }
-    } catch {
-      // ignore
+
+      // Non-Bluetooth / USB Cable: Baud-rate fallback probing (P6)
+      const cachedBaud = this.getCachedBaud(info);
+      const candidateBauds = [cachedBaud, targetBaudRate, 38400, 9600, 500000].filter(
+        (b, idx, arr): b is number => !!b && arr.indexOf(b) === idx
+      );
+
+      let verifiedBaud: number | null = null;
+
+      for (const baud of candidateBauds) {
+        this.log('info', `[Serial Port Open] Testing baud rate ${baud}...`);
+        let portOpened = false;
+        try {
+          if (!this.port.readable) {
+            await this.port.open({
+              baudRate: baud,
+              dataBits: 8,
+              stopBits: 1,
+              parity: 'none',
+              bufferSize: 8192,
+            });
+            portOpened = true;
+          }
+
+          if (this.enableSignals && typeof this.port.setSignals === 'function') {
+            try {
+              await this.port.setSignals({ dataTerminalReady: true, requestToSend: true });
+            } catch {}
+          }
+
+          this.keepReading = true;
+          this.readPromise = this.readLoop();
+
+          // Send \r twice with 600ms timeout
+          let ok = false;
+          try {
+            await this.send('\r', 600);
+            ok = true;
+          } catch {
+            try {
+              await this.send('\r', 600);
+              ok = true;
+            } catch {}
+          }
+
+          if (ok) {
+            verifiedBaud = baud;
+            this.log('info', `[Serial] Confirmed working baud rate: ${baud}`);
+            this.setCachedBaud(info, baud);
+            break;
+          }
+
+          // Not responsive on this baud; teardown read loop and close port, then test next
+          this.log('info', `[Serial] No response at ${baud} baud, testing next rate...`);
+          this.keepReading = false;
+          if (this.reader) {
+            try {
+              await this.reader.cancel();
+            } catch {}
+            this.reader = null;
+          }
+          if (this.readPromise) {
+            try {
+              await this.readPromise;
+            } catch {}
+            this.readPromise = null;
+          }
+          if (portOpened && this.port) {
+            try {
+              await this.port.close();
+            } catch {}
+          }
+          this.cleanup();
+        } catch (err: any) {
+          this.log('info', `[Serial] Baud ${baud} test error: ${err.message}`);
+          this.keepReading = false;
+          if (this.reader) {
+            try {
+              await this.reader.cancel();
+            } catch {}
+            this.reader = null;
+          }
+          if (this.readPromise) {
+            try {
+              await this.readPromise;
+            } catch {}
+            this.readPromise = null;
+          }
+          if (portOpened && this.port) {
+            try {
+              await this.port.close();
+            } catch {}
+          }
+          this.cleanup();
+        }
+      }
+
+      if (!verifiedBaud) {
+        throw new Error(`Failed to find responsive baud rate among: ${candidateBauds.join(', ')}`);
+      }
+
+      this.log('info', `[Serial] Link established at ${verifiedBaud} baud. Running initialization sequence...`);
+      const caps = await this.runInitSequence(profileProtocol);
+      this.lastUsedPort = this.port;
+      this.lastProfileProtocol = profileProtocol;
+      this.saveLastDevice(this.port);
+      return caps;
+    } catch (e) {
+      await this.teardownPort();
+      throw e;
     }
-
-    // Start background reading loop
-    this.keepReading = true;
-    this.readPromise = this.readLoop();
-
-    this.log('info', 'Serial stream established. Running fast initialization sequence...');
-    return await this.runInitSequence(profileProtocol);
   }
 
+  /**
+   * P2: Resilient background read loop surviving non-fatal stream errors.
+   */
   private async readLoop(): Promise<void> {
-    const textDecoder = new TextDecoder();
-
-    while (this.port?.readable && this.keepReading) {
-      let activeReader: any = null;
+    const decoder = new TextDecoder();
+    let missing = 0;
+    while (this.keepReading && this.port) {
+      const readable = this.port.readable;
+      if (!readable) {
+        // Chrome is swapping in a new stream
+        if (++missing > 40) break; // ~2 s, then treat as lost
+        await new Promise((r) => setTimeout(r, 50));
+        continue;
+      }
+      missing = 0;
+      let reader: any;
       try {
-        activeReader = this.port.readable.getReader();
-        this.reader = activeReader;
-
+        reader = readable.getReader();
+      } catch {
+        await new Promise((r) => setTimeout(r, 100));
+        continue;
+      }
+      this.reader = reader;
+      try {
         while (this.keepReading) {
-          const { value, done } = await activeReader.read();
+          const { value, done } = await reader.read();
           if (done) break;
-          if (value) {
-            const chunk = textDecoder.decode(value);
-            this.handleRxChunk(chunk);
-          }
+          if (value) this.handleRxChunk(decoder.decode(value, { stream: true }));
         }
       } catch (err: any) {
-        if (this.keepReading) {
-          this.log('error', `Serial stream read error: ${err.message}`);
-        }
+        if (this.keepReading) this.log('error', `Serial read error (${err.name}): ${err.message}`);
       } finally {
-        if (activeReader) {
-          try {
-            activeReader.releaseLock();
-          } catch {
-            // ignore
-          }
-        }
-        if (this.reader === activeReader) {
-          this.reader = null;
-        }
+        try {
+          reader.releaseLock();
+        } catch {}
+        this.reader = null;
       }
     }
+    if (this.keepReading) await this.handleLost('Serial stream ended unexpectedly');
   }
 
   private handleRxChunk(chunk: string): void {
@@ -284,20 +526,11 @@ export class SerialOBDService implements OBDTransport {
   }
 
   /**
-   * Raw prompt-driven send implementation.
-   * Flushes input, writes command, awaits prompt '>', strips echo, rejects on timeout.
+   * Raw prompt-driven send implementation without cancel-previous-command block.
    */
-  public async send(cmd: string, timeoutMs = 2500): Promise<string> {
+  private async sendNow(cmd: string, timeoutMs = 2500): Promise<string> {
     if (!this.isConnected()) {
       throw new Error('Not connected to serial adapter');
-    }
-
-    if (this.pendingRejecter) {
-      clearTimeout(this.commandTimeoutTimer);
-      this.pendingRejecter(new Error('Cancelled by new command'));
-      this.pendingResolver = null;
-      this.pendingRejecter = null;
-      this.pendingCmd = null;
     }
 
     // Flush input buffer before each send
@@ -342,6 +575,28 @@ export class SerialOBDService implements OBDTransport {
   }
 
   /**
+   * P4: Serializes all send() calls through an execution queue with timeout dirty protection.
+   */
+  public send(cmd: string, timeoutMs = 2500): Promise<string> {
+    const run = async () => {
+      if (this.dirty) {
+        await new Promise((r) => setTimeout(r, 300));
+        this.flush();
+        this.dirty = false;
+      }
+      try {
+        return await this.sendNow(cmd, timeoutMs);
+      } catch (e: any) {
+        if (String(e.message).startsWith('Timeout')) this.dirty = true;
+        throw e;
+      }
+    };
+    const p = this.queue.then(run, run);
+    this.queue = p.catch(() => {});
+    return p as Promise<string>;
+  }
+
+  /**
    * Sends an AT or OBD command with safety allowlist validation.
    */
   public async sendCommand(cmd: string, timeoutMs = 2500): Promise<string> {
@@ -366,12 +621,67 @@ export class SerialOBDService implements OBDTransport {
     return this.capabilities;
   }
 
-  public async disconnect(): Promise<void> {
+  /**
+   * Reconnects to the last-used port with its cached baud rate.
+   */
+  public async reconnect(profileProtocol?: string): Promise<AdapterCapabilities> {
+    this.userRequestedDisconnect = false;
+    await this.teardownPort();
+
+    const authorizedPorts = await this.getAuthorizedPorts();
+    const lastDeviceStr = typeof localStorage !== 'undefined' ? localStorage.getItem('obd_last_device') : null;
+    let candidate: any = null;
+
+    if (lastDeviceStr) {
+      try {
+        const lastDevice = JSON.parse(lastDeviceStr);
+        candidate = authorizedPorts.find((p: any) => {
+          const info = p.getInfo ? p.getInfo() : {};
+          if (
+            lastDevice.bluetoothServiceClassId &&
+            info.bluetoothServiceClassId === lastDevice.bluetoothServiceClassId
+          ) {
+            return true;
+          }
+          if (lastDevice.usbVendorId && info.usbVendorId === lastDevice.usbVendorId) {
+            return !lastDevice.usbProductId || info.usbProductId === lastDevice.usbProductId;
+          }
+          return false;
+        });
+      } catch {}
+    }
+
+    if (!candidate && this.lastUsedPort) {
+      candidate = this.lastUsedPort;
+    }
+
+    if (!candidate && authorizedPorts.length > 0) {
+      candidate = authorizedPorts[authorizedPorts.length - 1];
+    }
+
+    if (!candidate) {
+      throw new Error('No serial port available to reconnect');
+    }
+
+    this.port = candidate;
+    const proto = profileProtocol || this.lastProfileProtocol;
+    const info = this.port.getInfo ? this.port.getInfo() : {};
+    const cachedBaud = this.getCachedBaud(info) || 115200;
+
+    const caps = await this.openPort(cachedBaud, proto);
+    this.autoReconnectAttempts = 0;
+    return caps;
+  }
+
+  /**
+   * P1: Complete port teardown ensuring no open port, active reader, or dangling promise.
+   */
+  public async teardownPort(): Promise<void> {
     this.keepReading = false;
 
     if (this.pendingRejecter) {
       clearTimeout(this.commandTimeoutTimer);
-      this.pendingRejecter(new Error('Serial adapter disconnected'));
+      this.pendingRejecter(new Error('Serial port teardown'));
       this.pendingResolver = null;
       this.pendingRejecter = null;
       this.pendingCmd = null;
@@ -380,23 +690,21 @@ export class SerialOBDService implements OBDTransport {
     if (this.reader) {
       try {
         await this.reader.cancel();
-      } catch {
-        // ignore
-      }
+      } catch {}
+      this.reader = null;
     }
 
     if (this.readPromise) {
       try {
         await this.readPromise;
-      } catch {
-        // ignore
-      }
+      } catch {}
       this.readPromise = null;
     }
 
     if (this.port) {
       try {
         await this.port.close();
+        this.log('info', '[Serial Port Close] Port closed cleanly.');
       } catch (closeErr) {
         console.warn('Error closing serial port:', closeErr);
       }
@@ -404,20 +712,78 @@ export class SerialOBDService implements OBDTransport {
     }
 
     this.cleanup();
+  }
+
+  /**
+   * P3: Handles unexpected disconnection with backoff auto-reconnect.
+   */
+  public async handleLost(reason: string): Promise<void> {
+    this.log('error', `[Serial Disconnect] Reason: ${reason}`);
+    await this.teardownPort();
+    if (this.onDisconnectCallback) this.onDisconnectCallback();
+
+    if (!this.userRequestedDisconnect && this.autoReconnectAttempts < 3) {
+      const delays = [1000, 2000, 4000];
+      const delay = delays[this.autoReconnectAttempts] || 4000;
+      this.autoReconnectAttempts++;
+      this.log('info', `[Auto-Reconnect] Lost connection. Reconnecting in ${delay}ms (attempt ${this.autoReconnectAttempts}/3)...`);
+      this.autoReconnectTimer = setTimeout(async () => {
+        if (this.userRequestedDisconnect) return;
+        try {
+          const caps = await this.reconnect();
+          this.log('info', `[Auto-Reconnect] Successfully reconnected to ${this.getDeviceName()}`);
+          if (this.onConnectCallback) {
+            this.onConnectCallback(this.getDeviceName(), caps);
+          }
+        } catch (err: any) {
+          this.log('error', `[Auto-Reconnect] Attempt ${this.autoReconnectAttempts} failed: ${err.message}`);
+        }
+      }, delay);
+    }
+  }
+
+  public async disconnect(): Promise<void> {
+    this.userRequestedDisconnect = true;
+    if (this.autoReconnectTimer) {
+      clearTimeout(this.autoReconnectTimer);
+      this.autoReconnectTimer = null;
+    }
+    this.autoReconnectAttempts = 0;
+    await this.teardownPort();
     if (this.onDisconnectCallback) this.onDisconnectCallback();
   }
 
   private cleanup(): void {
     if (this.commandTimeoutTimer) clearTimeout(this.commandTimeoutTimer);
+    this.commandTimeoutTimer = null;
     this.pendingResolver = null;
     this.pendingRejecter = null;
     this.pendingCmd = null;
     this.receiveBuffer = '';
+    this.queue = Promise.resolve();
+    this.dirty = false;
   }
 
   public log(direction: ATLogEntry['direction'], text: string): void {
     if (this.onLog) {
       this.onLog({ direction, text });
     }
+  }
+
+  public destroy(): void {
+    if (typeof navigator !== 'undefined' && 'serial' in navigator) {
+      const serialNav = (navigator as any).serial;
+      try {
+        serialNav.removeEventListener('disconnect', this.handleSerialDisconnectEvent);
+        serialNav.removeEventListener('connect', this.handleSerialConnectEvent);
+      } catch {}
+    }
+    if (typeof window !== 'undefined') {
+      try {
+        window.removeEventListener('beforeunload', this.handlePageUnload);
+        window.removeEventListener('pagehide', this.handlePageUnload);
+      } catch {}
+    }
+    this.disconnect();
   }
 }
