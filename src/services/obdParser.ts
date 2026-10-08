@@ -43,8 +43,25 @@ export function extractDataBytes(response: string, modePid: string): number[] {
     return [];
   }
 
-  // Tokenize hex strings
-  const tokens = clean.split(/\s+/).filter((t) => /^[0-9A-Fa-f]{2,3}$/.test(t));
+  // Tokenize hex strings: support both spaced format ("41 0C 1A F8") and unspaced format ("410C1AF8" from AT S0)
+  let tokens = clean.split(/\s+/).filter((t) => /^[0-9A-Fa-f]{2,3}$/.test(t));
+  if (tokens.length <= 1) {
+    const hexOnly = clean.replace(/[^0-9A-Fa-f]/g, '');
+    if (/^[7-9A-Fa-f][0-9A-Fa-f]{2}/.test(hexOnly) && hexOnly.length > 5) {
+      // 11-bit header e.g. 7E8 followed by payload
+      const header = hexOnly.slice(0, 3);
+      const rest = hexOnly.slice(3);
+      tokens = [header];
+      for (let i = 0; i < rest.length; i += 2) {
+        tokens.push(rest.slice(i, i + 2));
+      }
+    } else {
+      tokens = [];
+      for (let i = 0; i < hexOnly.length; i += 2) {
+        tokens.push(hexOnly.slice(i, i + 2));
+      }
+    }
+  }
   if (tokens.length === 0) return [];
 
   const cleanPid = modePid.replace(/\s+/g, '').toUpperCase();

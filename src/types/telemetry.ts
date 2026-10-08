@@ -46,6 +46,7 @@ export interface VehicleProfile {
   name: string;
   commands: OBDCommand[];
   isDefault?: boolean;
+  protocol?: string; // e.g. "6" for ISO 15765-4 CAN 11/500
 }
 
 export interface WidgetConfig {

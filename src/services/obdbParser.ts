@@ -119,25 +119,52 @@ export function isServiceAllowed(serviceId: string): { allowed: boolean; reason?
  * Validates a mode/PID command string (e.g. "010C" or "224899") against the safety allowlist.
  */
 export function validateCommandSafety(modePid: string): { allowed: boolean; reason?: string } {
-  const clean = modePid.trim().replace(/^AT\s+/i, '').toUpperCase();
-  // Allow AT read/config commands
-  if (modePid.trim().toUpperCase().startsWith('AT')) {
-    const at = modePid.trim().toUpperCase();
+  const trimmed = modePid.trim();
+  // Allow sync pulse / empty string
+  if (!trimmed || trimmed === '\r') {
+    return { allowed: true };
+  }
+
+  const upper = trimmed.toUpperCase();
+
+  // Allow AT and ST diagnostic configuration commands
+  if (upper.startsWith('AT') || upper.startsWith('ST')) {
     if (
-      at === 'AT Z' ||
-      at === 'AT RV' ||
-      at === 'AT DP' ||
-      at === 'AT SP 6' ||
-      at === 'AT H1' ||
-      at.startsWith('AT SH') ||
-      at.startsWith('AT CRA') ||
-      at.startsWith('AT ST')
+      upper === 'AT Z' ||
+      upper === 'AT WS' ||
+      upper === 'ATI' ||
+      upper === 'AT I' ||
+      upper === 'AT@1' ||
+      upper === 'STI' ||
+      upper === 'ST I' ||
+      upper === 'AT E0' ||
+      upper === 'AT E1' ||
+      upper === 'AT L0' ||
+      upper === 'AT L1' ||
+      upper === 'AT S0' ||
+      upper === 'AT S1' ||
+      upper === 'AT M0' ||
+      upper === 'AT M1' ||
+      upper === 'AT RV' ||
+      upper === 'AT DP' ||
+      upper === 'AT DPN' ||
+      upper === 'AT SP 6' ||
+      upper === 'AT SP 0' ||
+      upper.startsWith('AT SP') ||
+      upper === 'AT H1' ||
+      upper === 'AT H0' ||
+      upper.startsWith('AT SH') ||
+      upper.startsWith('AT CRA') ||
+      upper.startsWith('AT ST') ||
+      upper.startsWith('AT AT')
     ) {
       return { allowed: true };
     }
   }
 
-  const service = clean.slice(0, 2);
+  // Diagnostic mode/PID command (e.g. 010C, 010C1, 01 0C 0D, 224802, 22480201)
+  const hexOnly = upper.replace(/[\s\r\n]/g, '');
+  const service = hexOnly.slice(0, 2);
   return isServiceAllowed(service);
 }
 

@@ -1,5 +1,6 @@
 import type { ATLogEntry } from '../types/ble';
 import { validateCommandSafety } from './obdbParser';
+import { executeAdapterInit, type OBDTransport, type AdapterCapabilities } from './adapterInit';
 
 // Comprehensive catalog of BLE UUIDs used across commercial & hobbyist OBD-II dongles
 // 1. Nordic Semiconductor UART Service (NUS) — Vgate iCar Pro, Veepeak OBDCheck BLE+, Konnwei, LELink, Tonwon
@@ -49,16 +50,19 @@ export const ALL_OBD_SERVICES: BluetoothServiceUUID[] = [
 
 export type BLELogCallback = (entry: Omit<ATLogEntry, 'id' | 'timestamp'>) => void;
 
-export class BLEService {
+export class BLEService implements OBDTransport {
   private device: BluetoothDevice | null = null;
   private server: BluetoothRemoteGATTServer | null = null;
   private txCharacteristic: BluetoothRemoteGATTCharacteristic | null = null;
   private rxCharacteristic: BluetoothRemoteGATTCharacteristic | null = null;
 
   private receiveBuffer = '';
+  private pendingCmd: string | null = null;
   private pendingResolver: ((response: string) => void) | null = null;
   private pendingRejecter: ((err: Error) => void) | null = null;
   private commandTimeoutTimer: any = null;
+
+  private capabilities: AdapterCapabilities | null = null;
 
   private onLog: BLELogCallback | null = null;
   private onDisconnectCallback: (() => void) | null = null;
@@ -76,11 +80,18 @@ export class BLEService {
     return !!(this.server && this.server.connected);
   }
 
-  public getDeviceName(): string | undefined {
+  public getCapabilities(): AdapterCapabilities | null {
+    return this.capabilities;
+  }
+
+  public getDeviceName(): string {
+    if (this.capabilities?.identity && this.capabilities.identity !== 'ELM327 Compatible') {
+      return this.capabilities.identity;
+    }
     return this.device?.name || 'Bluetooth LE OBD-II Adapter';
   }
 
-  public async connect(): Promise<void> {
+  public async connect(profileProtocol?: string): Promise<AdapterCapabilities> {
     if (!this.isSupported()) {
       throw new Error(
         'Web Bluetooth is not supported in this browser. Please use Google Chrome, Microsoft Edge, or the Bluefy browser on iOS.'
@@ -90,7 +101,6 @@ export class BLEService {
     this.log('info', 'Scanning for BLE OBD-II adapters (OBDLink CX, Veepeak, Vgate, Carista, Generic BLE)...');
 
     try {
-      // First attempt: search with targeted OBD filters
       this.device = await navigator.bluetooth.requestDevice({
         filters: [
           { services: [NORDIC_UART_SERVICE] },
@@ -128,7 +138,6 @@ export class BLEService {
         throw new Error('Bluetooth device selection cancelled');
       }
 
-      // Fallback: If device has an uncommon broadcast name, request with acceptAllDevices
       this.log('info', 'Searching all nearby Bluetooth devices...');
       try {
         this.device = await navigator.bluetooth.requestDevice({
@@ -156,20 +165,15 @@ export class BLEService {
     this.log('info', 'Discovering GATT primary OBD services & characteristics...');
     await this.discoverServicesAndCharacteristics();
 
-    this.log('info', 'BLE connection established. Running OBD-II initialization sequence...');
-    await this.runInitSequence();
+    this.log('info', 'BLE connection established. Running fast initialization sequence...');
+    return await this.runInitSequence(profileProtocol);
   }
 
-  /**
-   * Intelligently discovers the primary UART/Serial service and automatically
-   * resolves TX (write) and RX (notify) characteristics across any BLE OBD dongle.
-   */
   private async discoverServicesAndCharacteristics(): Promise<void> {
     if (!this.server) throw new Error('GATT server not connected');
 
     let activeService: BluetoothRemoteGATTService | null = null;
 
-    // 1. Try known OBD services in priority order
     for (const serviceUuid of ALL_OBD_SERVICES) {
       try {
         const s = await this.server.getPrimaryService(serviceUuid);
@@ -179,11 +183,10 @@ export class BLEService {
           break;
         }
       } catch {
-        // continue trying next service
+        // continue
       }
     }
 
-    // 2. Fallback: inspect all services exposed by the device
     if (!activeService) {
       try {
         const allServices = await this.server.getPrimaryServices();
@@ -200,24 +203,20 @@ export class BLEService {
       throw new Error('Could not discover a compatible OBD-II GATT serial service on this adapter.');
     }
 
-    // 3. Inspect characteristics of the active service dynamically
     const characteristics = await activeService.getCharacteristics();
     let writeChar: BluetoothRemoteGATTCharacteristic | null = null;
     let notifyChar: BluetoothRemoteGATTCharacteristic | null = null;
 
     for (const c of characteristics) {
       const p = c.properties;
-      // Look for write capability
       if (!writeChar && (p.write || p.writeWithoutResponse)) {
         writeChar = c;
       }
-      // Look for notification capability
       if (!notifyChar && (p.notify || p.indicate)) {
         notifyChar = c;
       }
     }
 
-    // If one characteristic handles bidirectional communication (e.g. TI CC2540 / HM-10 0xFFE1)
     if (writeChar && !notifyChar && (writeChar.properties.notify || writeChar.properties.indicate)) {
       notifyChar = writeChar;
     } else if (notifyChar && !writeChar && (notifyChar.properties.write || notifyChar.properties.writeWithoutResponse)) {
@@ -234,115 +233,51 @@ export class BLEService {
     this.log('info', `Configured TX (write): ${writeChar.uuid.slice(0, 8)}...`);
     this.log('info', `Configured RX (notify): ${notifyChar.uuid.slice(0, 8)}...`);
 
-    // Setup notifications on RX
     await this.rxCharacteristic.startNotifications();
     this.rxCharacteristic.addEventListener('characteristicvaluechanged', (event: any) => {
       this.handleRxData(event.target.value);
     });
   }
 
-  /**
-   * Universal OBD-II Adapter Initialization Sequence:
-   * 1. AT Z   (Reset ELM327 / STN controller)
-   * 2. AT E0  (Echo Off — ensures clean ECU response packets)
-   * 3. AT SP 6 (ISO 15765-4 CAN 11-bit 500kbps, fallback to AT SP 0 Auto if unsupported)
-   * 4. AT H1  (CAN Headers ON — required to identify ECU modules e.g. 7E0 vs 7E4)
-   */
-  public async runInitSequence(): Promise<void> {
-    // 1. Reset
-    this.log('tx', 'AT Z');
-    try {
-      const zResp = await this.sendCommand('AT Z', 4000);
-      this.log('rx', zResp);
-    } catch (err: any) {
-      this.log('error', `Reset (AT Z) timed out or failed: ${err.message}`);
-      this.disconnect();
-      throw new Error(`Init command AT Z failed: ${err.message}`);
-    }
-
-    // Small stabilization delay after controller reboot
-    await new Promise((r) => setTimeout(r, 200));
-
-    // 2. Echo Off
-    this.log('tx', 'AT E0');
-    try {
-      const eResp = await this.sendCommand('AT E0', 2500);
-      this.log('rx', eResp);
-    } catch {
-      // Ignore if adapter rejects AT E0
-    }
-
-    // 3. Protocol Select (Try ISO 15765-4 11-bit 500k, fallback to Auto)
-    this.log('tx', 'AT SP 6');
-    try {
-      const spResp = await this.sendCommand('AT SP 6', 3000);
-      this.log('rx', spResp);
-      if (spResp.includes('?') || spResp.includes('ERROR')) {
-        // Fallback to automatic protocol detection
-        this.log('info', 'AT SP 6 rejected. Trying AT SP 0 (Automatic protocol search)...');
-        const autoResp = await this.sendCommand('AT SP 0', 3000);
-        this.log('rx', autoResp);
-      }
-    } catch (err: any) {
-      this.log('error', `Protocol select failed: ${err.message}`);
-      this.disconnect();
-      throw new Error(`Init command AT SP failed: ${err.message}`);
-    }
-
-    // 4. Headers On
-    this.log('tx', 'AT H1');
-    try {
-      const hResp = await this.sendCommand('AT H1', 3000);
-      this.log('rx', hResp);
-    } catch (err: any) {
-      this.log('error', `Headers ON (AT H1) failed: ${err.message}`);
-      this.disconnect();
-      throw new Error(`Init command AT H1 failed: ${err.message}`);
-    }
-
-    this.log('info', 'OBD-II Adapter initialized successfully (Headers ON, CAN protocol active)');
+  public flush(): void {
+    this.receiveBuffer = '';
   }
 
   /**
-   * Sends raw AT or OBD command and awaits response ending with ELM prompt character '>'.
-   * Splits into 20-byte chunks to respect standard BLE ATT MTU limits across all dongles.
+   * Raw prompt-driven send implementation.
+   * Flushes input, writes command in 20-byte chunks, awaits '>', strips echo, rejects on timeout.
    */
-  public async sendCommand(cmd: string, timeoutMs = 3000): Promise<string> {
+  public async send(cmd: string, timeoutMs = 2500): Promise<string> {
     if (!this.txCharacteristic || !this.server?.connected) {
       throw new Error('Not connected to BLE adapter');
     }
 
-    // Safety allowlist verification
-    const safety = validateCommandSafety(cmd);
-    if (!safety.allowed) {
-      this.log('error', `[Safety Blocked] ${safety.reason}`);
-      throw new Error(`[OBDb Safety Hard Block] ${safety.reason}`);
-    }
-
-    // Cancel any previous pending command
     if (this.pendingRejecter) {
       clearTimeout(this.commandTimeoutTimer);
       this.pendingRejecter(new Error('Cancelled by new command'));
       this.pendingResolver = null;
       this.pendingRejecter = null;
+      this.pendingCmd = null;
     }
 
-    this.receiveBuffer = '';
-    const formattedCmd = cmd.trim() + '\r';
+    this.flush();
+    const cleanCmd = cmd.trim();
+    const formattedCmd = cleanCmd === '' ? '\r' : `${cleanCmd}\r`;
     const encoder = new TextEncoder();
     const data = encoder.encode(formattedCmd);
 
     return new Promise<string>((resolve, reject) => {
+      this.pendingCmd = cleanCmd;
       this.pendingResolver = resolve;
       this.pendingRejecter = reject;
 
       this.commandTimeoutTimer = setTimeout(() => {
         this.pendingResolver = null;
         this.pendingRejecter = null;
+        this.pendingCmd = null;
         reject(new Error(`Timeout (${timeoutMs}ms) waiting for response to "${cmd}"`));
       }, timeoutMs);
 
-      // Safe chunked write (20-byte chunks prevent BLE buffer overflow on cheap chips)
       const writeData = async () => {
         const char = this.txCharacteristic as any;
         const CHUNK_SIZE = 20;
@@ -361,6 +296,10 @@ export class BLEService {
             }
           }
         } catch (writeErr) {
+          clearTimeout(this.commandTimeoutTimer);
+          this.pendingResolver = null;
+          this.pendingRejecter = null;
+          this.pendingCmd = null;
           reject(writeErr);
         }
       };
@@ -369,23 +308,60 @@ export class BLEService {
     });
   }
 
+  /**
+   * Sends an AT or OBD command with safety allowlist verification.
+   */
+  public async sendCommand(cmd: string, timeoutMs = 2500): Promise<string> {
+    if (!this.txCharacteristic || !this.server?.connected) {
+      throw new Error('Not connected to BLE adapter');
+    }
+
+    const safety = validateCommandSafety(cmd);
+    if (!safety.allowed) {
+      this.log('error', `[Safety Blocked] ${safety.reason}`);
+      throw new Error(`[OBDb Safety Hard Block] ${safety.reason}`);
+    }
+
+    return this.send(cmd, timeoutMs);
+  }
+
+  /**
+   * Executes the fast, robust initialization sequence.
+   */
+  public async runInitSequence(profileProtocol?: string): Promise<AdapterCapabilities> {
+    this.capabilities = await executeAdapterInit(this, profileProtocol);
+    return this.capabilities;
+  }
+
   private handleRxData(dataView: DataView): void {
     const decoder = new TextDecoder();
     const chunk = decoder.decode(dataView);
     this.receiveBuffer += chunk;
 
-    // ELM327 / STN controller responds ending with prompt character '>'
     if (this.receiveBuffer.includes('>')) {
-      const fullResponse = this.receiveBuffer.replace(/>/g, '').trim();
+      const promptIdx = this.receiveBuffer.indexOf('>');
+      const raw = this.receiveBuffer.slice(0, promptIdx);
+      this.receiveBuffer = this.receiveBuffer.slice(promptIdx + 1);
+
       clearTimeout(this.commandTimeoutTimer);
 
       if (this.pendingResolver) {
         const resolve = this.pendingResolver;
+        const sentCmd = this.pendingCmd;
         this.pendingResolver = null;
         this.pendingRejecter = null;
-        resolve(fullResponse);
+        this.pendingCmd = null;
+
+        // Clean response: strip echo of command if present
+        let cleaned = raw.replace(/\r+/g, '\r').trim();
+        if (sentCmd && sentCmd.length > 0) {
+          const lines = cleaned.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean);
+          if (lines.length > 0 && lines[0].toUpperCase() === sentCmd.toUpperCase()) {
+            cleaned = lines.slice(1).join('\r');
+          }
+        }
+        resolve(cleaned.trim());
       }
-      this.receiveBuffer = '';
     }
   }
 
@@ -400,13 +376,14 @@ export class BLEService {
     if (this.commandTimeoutTimer) clearTimeout(this.commandTimeoutTimer);
     this.pendingResolver = null;
     this.pendingRejecter = null;
+    this.pendingCmd = null;
     this.server = null;
     this.txCharacteristic = null;
     this.rxCharacteristic = null;
     this.receiveBuffer = '';
   }
 
-  private log(direction: ATLogEntry['direction'], text: string): void {
+  public log(direction: ATLogEntry['direction'], text: string): void {
     if (this.onLog) {
       this.onLog({ direction, text });
     }

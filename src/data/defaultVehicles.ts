@@ -13,6 +13,7 @@ export interface VehicleDefinition {
   isDefault?: boolean;
   years: Array<number | 'all'>;
   repos: string[];
+  protocol?: string; // e.g. '6' for ISO 15765-4 CAN 11/500
 }
 
 export const VEHICLE_DEFINITIONS: VehicleDefinition[] = [
@@ -21,21 +22,25 @@ export const VEHICLE_DEFINITIONS: VehicleDefinition[] = [
     isDefault: true,
     years: ['all', 2025, 2024, 2023, 2022, 2021],
     repos: ['Ford-Mustang-Mach-E', 'Ford', 'SAEJ1979'],
+    protocol: '6',
   },
   {
     name: 'Ford Fusion Hybrid',
     years: ['all', 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013],
     repos: ['Ford-Fusion-Hybrid', 'Ford-Fusion-Energi', 'Ford-Fusion', 'Ford', 'SAEJ1979'],
+    protocol: '6',
   },
   {
     name: 'Toyota Highlander',
     years: ['all', 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014],
     repos: ['Toyota-Highlander', 'Toyota-Grand-Highlander-Hybrid', 'Toyota-Grand-Highlander', 'Toyota', 'SAEJ1979'],
+    protocol: '6',
   },
   {
     name: 'Standard OBD-II (J1979 only)',
     years: ['all'],
     repos: ['SAEJ1979'],
+    protocol: '6',
   },
 ];
 
@@ -78,6 +83,7 @@ export function generateInitialProfiles(): VehicleProfile[] {
   return VEHICLE_DEFINITIONS.map((def) => ({
     name: def.name,
     isDefault: def.isDefault,
+    protocol: def.protocol || '6',
     commands: buildVehicleCommands(def.name, 'all'),
   }));
 }

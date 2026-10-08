@@ -1,4 +1,4 @@
-import type { OBDCommand } from '../types/telemetry';
+ import type { OBDCommand } from '../types/telemetry';
 
 export const REQUIRED_HEADERS = [
   'VEHICLE_NAME',

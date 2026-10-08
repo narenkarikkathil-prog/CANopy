@@ -7,6 +7,7 @@
 
 import type { BLELogCallback } from './bleService';
 import type { OBDCommand } from '../types/telemetry';
+import type { AdapterCapabilities } from './adapterInit';
 
 export class MockBLEService {
   private connected = false;
@@ -14,6 +15,20 @@ export class MockBLEService {
   private onDisconnectCallback: (() => void) | null = null;
   private tickCount = 0;
   private getActiveCommandsCallback: (() => OBDCommand[]) | null = null;
+  private capabilities: AdapterCapabilities = {
+    identity: 'OBDLink MX+ v5.6.1 (Simulated)',
+    deviceDescription: 'OBDLink MX+',
+    isSTN: true,
+    protocol: '6',
+    supportsAT2: true,
+    supportsCRA: true,
+    supportsResponseCount: true,
+    supportsL0: true,
+    supportsS0: true,
+    unsupportedCommands: new Set(),
+    stageTimings: { sync: 15, reset: 25, config: 20, protocol: 30, capabilities: 25 },
+    totalInitTimeMs: 115,
+  };
 
   constructor(
     onLog?: BLELogCallback,
@@ -33,13 +48,17 @@ export class MockBLEService {
     return this.connected;
   }
 
+  public getCapabilities(): AdapterCapabilities {
+    return this.capabilities;
+  }
+
   public getDeviceName(): string {
     return 'Simulated BLE Adapter';
   }
 
   public async connect(): Promise<void> {
     this.log('info', '[Simulator] Connecting to Simulated ELM327 v1.5 BLE Adapter...');
-    await new Promise((r) => setTimeout(r, 350));
+    await new Promise((r) => setTimeout(r, 200));
     this.connected = true;
     this.log('info', '[Simulator] Adapter connected. Executing init sequence...');
     await this.runInitSequence();
@@ -47,18 +66,26 @@ export class MockBLEService {
 
   public async runInitSequence(): Promise<void> {
     const steps = [
-      { cmd: 'AT Z', resp: 'ELM327 v1.5' },
-      { cmd: 'AT SP 6', resp: 'OK' },
+      { cmd: '\\r', resp: '>' },
+      { cmd: 'AT WS', resp: 'ELM327 v1.5' },
+      { cmd: 'AT E0', resp: 'OK' },
+      { cmd: 'AT L0', resp: 'OK' },
+      { cmd: 'AT S0', resp: 'OK' },
       { cmd: 'AT H1', resp: 'OK' },
+      { cmd: 'AT SP 6', resp: 'OK' },
+      { cmd: 'ATI', resp: 'OBDLink MX+ v5.6.1' },
+      { cmd: 'AT@1', resp: 'OBDLink MX+' },
+      { cmd: 'STI', resp: 'STN2120 v5.6.1' },
+      { cmd: 'AT AT2', resp: 'OK' },
     ];
 
     for (const step of steps) {
       this.log('tx', step.cmd);
-      await new Promise((r) => setTimeout(r, 120));
+      await new Promise((r) => setTimeout(r, 40));
       this.log('rx', step.resp);
     }
 
-    this.log('info', '[Simulator] Initialization complete (CAN 11-bit 500kbps, Headers ON)');
+    this.log('info', '[Simulator] Fast initialization complete (ISO 15765-4 CAN 11/500, Headers ON, STN Mode)');
   }
 
   public async sendCommand(cmd: string): Promise<string> {
@@ -68,24 +95,52 @@ export class MockBLEService {
 
     this.tickCount++;
     const cleanCmd = cmd.trim().toUpperCase();
-    await new Promise((r) => setTimeout(r, 45)); // Simulate realistic UART transmission latency
+    await new Promise((r) => setTimeout(r, 25)); // Simulate realistic low-latency prompt response
 
-    // 1. AT command handler
-    if (cleanCmd.startsWith('AT')) {
+    if (!cleanCmd || cleanCmd === '\\R' || cleanCmd === '\r') {
+      return '>';
+    }
+
+    // 1. AT and ST command handler
+    if (cleanCmd.startsWith('AT') || cleanCmd.startsWith('ST')) {
+      if (cleanCmd === 'ATI' || cleanCmd === 'AT I') return 'OBDLink MX+ v5.6.1';
+      if (cleanCmd === 'AT@1') return 'OBDLink MX+';
+      if (cleanCmd === 'STI') return 'STN2120 v5.6.1';
+      if (cleanCmd === 'AT WS') return 'ELM327 v1.5';
       if (cleanCmd === 'AT Z') return 'ELM327 v1.5';
-      if (cleanCmd === 'AT RV') return '14.2V'; // 12V system voltage (passes battery guard)
+      if (cleanCmd === 'AT RV') return '14.2V';
+      if (cleanCmd === 'AT DPN') return '6';
       if (cleanCmd === 'AT DP') return 'ISO 15765-4 (CAN 11/500)';
-      if (cleanCmd.startsWith('AT SH') || cleanCmd.startsWith('AT CRA') || cleanCmd.startsWith('AT ST')) {
+      if (cleanCmd === 'AT AT2') return 'OK';
+      if (
+        cleanCmd.startsWith('AT SH') ||
+        cleanCmd.startsWith('AT CRA') ||
+        cleanCmd.startsWith('AT ST') ||
+        cleanCmd.startsWith('AT SP') ||
+        cleanCmd === 'AT E0' ||
+        cleanCmd === 'AT L0' ||
+        cleanCmd === 'AT S0' ||
+        cleanCmd === 'AT H1'
+      ) {
         return 'OK';
       }
       return 'OK';
     }
 
+    if (cleanCmd === '0100' || cleanCmd.startsWith('0100')) {
+      return '7E8 06 41 00 BE 3F B8 11';
+    }
+
     // 2. Dynamic OBDb CAN response generator
-    // Locate the command in active vehicle profile
+    // Locate the command in active vehicle profile (strip trailing count digit like '1')
+    const strippedCmd = cleanCmd.replace(/1$/, '');
     const activeCommands = this.getActiveCommandsCallback ? this.getActiveCommandsCallback() : [];
     const matchedCmd = activeCommands.find(
-      (c) => c.modePid === cleanCmd || cleanCmd.endsWith(c.modePid)
+      (c) =>
+        c.modePid === cleanCmd ||
+        c.modePid === strippedCmd ||
+        cleanCmd.endsWith(c.modePid) ||
+        strippedCmd.endsWith(c.modePid)
     );
 
     const service = cleanCmd.slice(0, 2);

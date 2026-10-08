@@ -12,6 +12,7 @@ import {
   IconCheck,
   IconAlertTriangle,
   IconInfoCircle,
+  IconTrash,
 } from '@tabler/icons-react';
 
 interface BLEConnectionViewProps {
@@ -26,6 +27,7 @@ export const BLEConnectionView: React.FC<BLEConnectionViewProps> = ({ onNavigate
     connectBLE,
     connectClassic,
     connectUSB,
+    forgetSavedDevices,
     disconnect,
     quickReconnect,
     isSimulated,
@@ -43,13 +45,30 @@ export const BLEConnectionView: React.FC<BLEConnectionViewProps> = ({ onNavigate
     }
   }, [isSimulated]);
 
-  const handleConnect = () => {
+  const [forgetNotice, setForgetNotice] = useState<string | null>(null);
+
+  const handleConnect = (forceNew = false) => {
     if (isSimulated || selectedMode === 'ble') {
       connectBLE();
     } else if (selectedMode === 'classic') {
-      connectClassic();
+      connectClassic(forceNew);
     } else {
-      connectUSB();
+      connectUSB(forceNew);
+    }
+  };
+
+  const handleForgetDevices = async () => {
+    try {
+      const count = await forgetSavedDevices();
+      setForgetNotice(
+        count > 0
+          ? `Cleared ${count} saved device permission(s). You can select your adapter cleanly.`
+          : 'No saved devices found in browser permissions.'
+      );
+      setTimeout(() => setForgetNotice(null), 5000);
+    } catch (err: any) {
+      setForgetNotice(`Failed to clear: ${err.message}`);
+      setTimeout(() => setForgetNotice(null), 5000);
     }
   };
 
@@ -135,26 +154,26 @@ export const BLEConnectionView: React.FC<BLEConnectionViewProps> = ({ onNavigate
         <div className="ble-protocol-steps">
           <div className="protocol-step">
             <span className="step-num">1</span>
-            <span className="step-cmd">AT Z</span>
-            <span className="step-desc">Reset Controller</span>
+            <span className="step-cmd">\r / AT WS</span>
+            <span className="step-desc">Sync &amp; Warm Start</span>
           </div>
           <div className="protocol-step-arrow">→</div>
           <div className="protocol-step">
             <span className="step-num">2</span>
-            <span className="step-cmd">AT E0</span>
-            <span className="step-desc">Echo Off</span>
+            <span className="step-cmd">AT E0 / H1</span>
+            <span className="step-desc">Echo Off &amp; Headers</span>
           </div>
           <div className="protocol-step-arrow">→</div>
           <div className="protocol-step">
             <span className="step-num">3</span>
             <span className="step-cmd">AT SP 6</span>
-            <span className="step-desc">CAN 11-bit / 500k</span>
+            <span className="step-desc">Protocol Lock-in</span>
           </div>
           <div className="protocol-step-arrow">→</div>
           <div className="protocol-step">
             <span className="step-num">4</span>
-            <span className="step-cmd">AT H1</span>
-            <span className="step-desc">CAN Headers ON</span>
+            <span className="step-cmd">ATI / STI</span>
+            <span className="step-desc">Caps &amp; STN Probe</span>
           </div>
         </div>
 
@@ -231,29 +250,62 @@ export const BLEConnectionView: React.FC<BLEConnectionViewProps> = ({ onNavigate
 
             {/* Mode-specific hints and connect button */}
             <div className="connection-action-box">
-              <button
-                type="button"
-                className="btn-primary connect-main-btn"
-                onClick={handleConnect}
-                disabled={!isModeSupported}
-              >
-                {(!isSimulated && selectedMode === 'classic') ? (
-                  <IconPlugConnected size={20} />
-                ) : (!isSimulated && selectedMode === 'usb') ? (
-                  <IconDeviceUsb size={20} />
-                ) : (
-                  <IconBluetooth size={20} />
+              <div className="connection-buttons-group">
+                <button
+                  type="button"
+                  className="btn-primary connect-main-btn"
+                  onClick={() => handleConnect(false)}
+                  disabled={!isModeSupported}
+                >
+                  {(!isSimulated && selectedMode === 'classic') ? (
+                    <IconPlugConnected size={20} />
+                  ) : (!isSimulated && selectedMode === 'usb') ? (
+                    <IconDeviceUsb size={20} />
+                  ) : (
+                    <IconBluetooth size={20} />
+                  )}
+                  <span>
+                    {isSimulated
+                      ? 'Connect (BLE)'
+                      : selectedMode === 'ble'
+                      ? 'Connect via Bluetooth LE (BLE)'
+                      : selectedMode === 'classic'
+                      ? 'Connect via Bluetooth Classic (SPP)'
+                      : 'Connect via USB Serial Cable'}
+                  </span>
+                </button>
+
+                {!isSimulated && (selectedMode === 'classic' || selectedMode === 'usb') && (
+                  <div className="connection-secondary-actions">
+                    <button
+                      type="button"
+                      className="connect-sub-btn choose-new-btn"
+                      onClick={() => handleConnect(true)}
+                      title="Open device chooser to select or pair a new device"
+                    >
+                      <IconRefresh size={14} />
+                      <span>Select / Pair New Device</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="connect-sub-btn forget-btn"
+                      onClick={handleForgetDevices}
+                      title="Revoke and forget all saved serial/Bluetooth device permissions in this browser"
+                    >
+                      <IconTrash size={14} />
+                      <span>Forget Saved Devices</span>
+                    </button>
+                  </div>
                 )}
-                <span>
-                  {isSimulated
-                    ? 'Connect (BLE)'
-                    : selectedMode === 'ble'
-                    ? 'Connect via Bluetooth LE (BLE)'
-                    : selectedMode === 'classic'
-                    ? 'Connect via Bluetooth Classic (SPP)'
-                    : 'Connect via USB Serial Cable'}
-                </span>
-              </button>
+              </div>
+
+              {forgetNotice && (
+                <div className="forget-msg-pill">
+                  <IconCheck size={14} />
+                  <span>{forgetNotice}</span>
+                </div>
+              )}
 
               <div className="connection-mode-desc">
                 {isSimulated ? (
@@ -274,6 +326,26 @@ export const BLEConnectionView: React.FC<BLEConnectionViewProps> = ({ onNavigate
                   </span>
                 )}
               </div>
+
+              {!isSimulated && selectedMode === 'classic' && (
+                <div className="classic-guide-card">
+                  <div className="classic-guide-header">
+                    <IconInfoCircle size={15} />
+                    <span>macOS Bluetooth Serial Connection Guide</span>
+                  </div>
+                  <ul className="classic-guide-steps">
+                    <li>
+                      <strong>1. Pair in macOS First:</strong> Pair <code>OBDLink MX+</code> in <em>System Settings → Bluetooth</em> so macOS generates the virtual serial port.
+                    </li>
+                    <li>
+                      <strong>2. Select the <code>cu.</code> Port:</strong> In the browser chooser, select <strong>cu.OBDLinkMX...</strong> (do not select <code>cu.Bluetooth-Incoming-Port</code> or <code>debug-console</code>).
+                    </li>
+                    <li>
+                      <strong>3. Clearing Phantom Devices:</strong> If Chrome still shows an old ghost Bluetooth entry from previous sessions, click the tune/lock icon next to the URL in the address bar → <em>Reset permissions</em>, or visit <code>chrome://settings/content/serialPorts</code>.
+                    </li>
+                  </ul>
+                </div>
+              )}
             </div>
 
             {/* Helper link to Help Section */}

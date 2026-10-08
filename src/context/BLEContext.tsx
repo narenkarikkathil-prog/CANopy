@@ -1,13 +1,15 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
 import type { BLEConnectionStatus, ATLogEntry, ConnectionType } from '../types/ble';
-import type { LiveTelemetryMap, HistoryBufferMap } from '../types/telemetry';
+import type { LiveTelemetryMap, HistoryBufferMap, OBDCommand } from '../types/telemetry';
 import { BLEService } from '../services/bleService';
 import { SerialOBDService } from '../services/serialService';
 import { MockBLEService } from '../services/mockBleService';
+import type { AdapterCapabilities } from '../services/adapterInit';
 import { useVehicle } from './VehicleContext';
 import { useWidgets } from './WidgetContext';
 import { parseAndEvaluateResponse, isUnsupportedResponse } from '../services/obdParser';
-import { validateCommandSafety } from '../services/obdbParser';
+import { validateCommandSafety, decodeOBDbSignal } from '../services/obdbParser';
+import { evaluateFormula } from '../services/formulaParser';
 
 interface BLEContextType {
   status: BLEConnectionStatus;
@@ -25,11 +27,12 @@ interface BLEContextType {
   batteryGuardActive: boolean;
   batteryVoltage12V: number | null;
   unsupportedSignals: Set<string>;
-  connect: (mode?: ConnectionType) => Promise<void>;
+  connect: (mode?: ConnectionType, forceNew?: boolean) => Promise<void>;
   connectBLE: () => Promise<void>;
-  connectClassic: () => Promise<void>;
-  connectUSB: () => Promise<void>;
-  connectSerial: (subMode?: 'classic' | 'usb') => Promise<void>;
+  connectClassic: (forceNew?: boolean) => Promise<void>;
+  connectUSB: (forceNew?: boolean) => Promise<void>;
+  connectSerial: (subMode?: 'classic' | 'usb', forceNew?: boolean) => Promise<void>;
+  forgetSavedDevices: () => Promise<number>;
   disconnect: () => void;
   quickReconnect: () => Promise<void>;
   sendManualCommand: (cmd: string) => Promise<string>;
@@ -40,8 +43,51 @@ const BLEContext = createContext<BLEContextType | null>(null);
 
 const MAX_HISTORY_POINTS = 120; // 60-120 seconds rolling window
 
+// Standard SAE J1979 Mode 01 data byte lengths for batch parsing
+const MODE_01_PID_LENGTHS: Record<string, number> = {
+  '04': 1, '05': 1, '0B': 1, '0C': 2, '0D': 1, '0E': 1, '0F': 1,
+  '10': 2, '11': 1, '1F': 2, '2F': 1, '33': 1, '42': 2, '5C': 1,
+};
+
+/**
+ * Returns true if signal is highly dynamic (fast tier: polled every cycle).
+ * Slow tier signals (temperatures, SOC, fuel, pressure) are polled every 3rd cycle.
+ */
+function isFastSignal(cmd: OBDCommand): boolean {
+  const text = `${cmd.commandName} ${cmd.units} ${cmd.modePid}`.toLowerCase();
+  return (
+    text.includes('rpm') ||
+    text.includes('speed') ||
+    text.includes('current') ||
+    text.includes('throttle') ||
+    text.includes('accel') ||
+    text.includes('power') ||
+    text.includes('torque') ||
+    cmd.modePid === '010C' ||
+    cmd.modePid === '010D'
+  );
+}
+
+/**
+ * Appends single expected response count digit where valid (e.g. 010C1, 2248021)
+ * so ELM327 does not wait out its full receive timeout.
+ */
+function formatWireCommand(modePid: string, supportsCount: boolean): string {
+  if (!supportsCount) return modePid;
+  const clean = modePid.replace(/\s+/g, '').toUpperCase();
+  // Standard Mode 01 single PID
+  if (clean.length === 4 && clean.startsWith('01')) {
+    return `${clean}1`;
+  }
+  // Mode 22 UDS single PID
+  if (clean.length === 6 && clean.startsWith('22')) {
+    return `${clean}1`;
+  }
+  return modePid;
+}
+
 export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { availableCommands } = useVehicle();
+  const { availableCommands, activeVehicle } = useVehicle();
   const { widgets } = useWidgets();
 
   const [status, setStatus] = useState<BLEConnectionStatus>('disconnected');
@@ -59,6 +105,8 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const bleServiceRef = useRef<BLEService | null>(null);
   const serialServiceRef = useRef<SerialOBDService | null>(null);
   const mockServiceRef = useRef<MockBLEService | null>(null);
+  const capabilitiesRef = useRef<AdapterCapabilities | null>(null);
+
   const isPollingRef = useRef<boolean>(false);
   const activeHeaderRef = useRef<string>('7E0');
   const availableCommandsRef = useRef(availableCommands);
@@ -75,14 +123,14 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       direction,
       text,
     };
-    setAtLogs((prev) => [...prev.slice(-300), entry]); // Keep last 300 logs
+    setAtLogs((prev) => [...prev.slice(-300), entry]);
   }, []);
 
   const clearLogs = useCallback(() => {
     setAtLogs([]);
   }, []);
 
-  // Initialize service instances
+  // Initialize transport service instances
   useEffect(() => {
     bleServiceRef.current = new BLEService(
       (entry) => addLog(entry.direction, entry.text),
@@ -119,7 +167,6 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [addLog]);
 
-  // Keep mock service command provider updated
   useEffect(() => {
     mockServiceRef.current?.setCommandProvider(() => availableCommandsRef.current);
   }, [availableCommands]);
@@ -132,7 +179,7 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Connect handler supporting BLE, Bluetooth Classic (OBDLink MX+), USB Serial, and Simulation
   const connect = useCallback(
-    async (mode?: ConnectionType) => {
+    async (mode?: ConnectionType, forceNew = false) => {
       const targetMode = isSimulated ? 'simulated' : (mode || connectionType);
       setConnectionType(targetMode);
       setStatus('connecting');
@@ -161,12 +208,23 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       addLog('info', `Initiating connection via ${label}...`);
 
       try {
+        let caps: AdapterCapabilities | null = null;
+        const profileProto = activeVehicle?.protocol || '6';
+
         if (isSerialKind && serialServiceRef.current) {
           const subMode = targetMode === 'classic' ? 'classic' : targetMode === 'usb' ? 'usb' : 'all';
-          await serialServiceRef.current.connect(subMode);
+          caps = await serialServiceRef.current.connect(subMode, 115200, forceNew, profileProto);
+        } else if (service instanceof BLEService) {
+          caps = await service.connect(profileProto);
         } else {
           await service.connect();
+          caps = (service as any).getCapabilities ? (service as any).getCapabilities() : null;
         }
+
+        if (caps) {
+          capabilitiesRef.current = caps;
+        }
+
         setStatus('connected');
         const resolvedName =
           service.getDeviceName() ||
@@ -188,13 +246,24 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addLog('error', `Connection error: ${err.message || 'Failed'}`);
       }
     },
-    [connectionType, isSimulated, addLog]
+    [connectionType, isSimulated, activeVehicle, addLog]
   );
 
   const connectBLE = useCallback(() => connect('ble'), [connect]);
-  const connectClassic = useCallback(() => connect('classic'), [connect]);
-  const connectUSB = useCallback(() => connect('usb'), [connect]);
-  const connectSerial = useCallback((subMode?: 'classic' | 'usb') => connect(subMode || 'serial'), [connect]);
+  const connectClassic = useCallback((forceNew = false) => connect('classic', forceNew), [connect]);
+  const connectUSB = useCallback((forceNew = false) => connect('usb', forceNew), [connect]);
+  const connectSerial = useCallback(
+    (subMode?: 'classic' | 'usb', forceNew = false) => connect(subMode || 'serial', forceNew),
+    [connect]
+  );
+
+  const forgetSavedDevices = useCallback(async (): Promise<number> => {
+    addLog('info', 'Revoking saved serial/Bluetooth device permissions in browser...');
+    const count = (await serialServiceRef.current?.forgetAllPorts()) || 0;
+    setStatus('disconnected');
+    setDeviceName(null);
+    return count;
+  }, [addLog]);
 
   const disconnect = useCallback(() => {
     bleServiceRef.current?.disconnect();
@@ -212,10 +281,12 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!service) return;
 
     try {
+      const profileProto = activeVehicle?.protocol || '6';
       if (!service.isConnected()) {
-        await service.connect();
+        await (service as any).connect(profileProto);
       } else {
-        await service.runInitSequence();
+        const caps = await (service as any).runInitSequence(profileProto);
+        if (caps) capabilitiesRef.current = caps;
       }
       setStatus('connected');
       setDeviceName(service.getDeviceName() || null);
@@ -224,7 +295,7 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setDeviceName(null);
       addLog('error', `Quick-reconnect failed: ${err.message}`);
     }
-  }, [getActiveService, addLog]);
+  }, [getActiveService, activeVehicle, addLog]);
 
   const setIsSimulated = useCallback((sim: boolean) => {
     disconnect();
@@ -240,7 +311,6 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         throw new Error('Adapter is not connected');
       }
 
-      // Hard safety allowlist check
       const safety = validateCommandSafety(cmd);
       if (!safety.allowed) {
         addLog('error', `[Safety Blocked] ${safety.reason}`);
@@ -260,8 +330,7 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [getActiveService, addLog]
   );
 
-  // Polling Scheduler Loop
-  // Step 4: Gentle staggered polling, battery guard, and unsupported signal handling
+  // Fast, Adaptive Polling Loop
   useEffect(() => {
     if (status !== 'connected') {
       isPollingRef.current = false;
@@ -278,12 +347,10 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     widgets.forEach((w) => {
       if (w.signalSourceId) {
-        // Direct match
         const directCmd = availableCommands.find((c) => c.id === w.signalSourceId);
         if (directCmd) {
           activeCommandIds.add(directCmd.id);
         } else {
-          // Suffix match (e.g. user selected vehicle changed)
           const rawSig = w.signalSourceId.replace(/^[^_]+_/, '');
           const fallback = availableCommands.find((c) => c.id.endsWith(rawSig) || c.modePid === w.signalSourceId);
           if (fallback) activeCommandIds.add(fallback.id);
@@ -298,7 +365,6 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const commandsToPoll = availableCommands.filter((c) => activeCommandIds.has(c.id));
-
     if (commandsToPoll.length === 0) {
       return;
     }
@@ -306,25 +372,24 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const pollLoop = async () => {
       const service = getActiveService();
       let loopCounter = 0;
-      let cmdIndex = 0;
+      let batchingSupported = true;
 
       while (!cancel && isPollingRef.current && service?.isConnected()) {
         loopCounter++;
 
-        // Step 4: Battery Guard — check 12V battery voltage every 15 cycles
-        if (loopCounter % 15 === 1) {
+        // 1. Battery Guard: Check 12V voltage every 20 cycles
+        if (loopCounter % 20 === 1) {
           try {
-            const rvResp = await service.sendCommand('AT RV', 1500);
+            const rvResp = await service.sendCommand('AT RV', 1200);
             const voltsMatch = rvResp.match(/([0-9.]+)\s*V/i);
             if (voltsMatch) {
               const volts = parseFloat(voltsMatch[1]);
               setBatteryVoltage12V(volts);
 
-              // Low 12V voltage guard (< 11.8V indicates weak battery or vehicle turned OFF)
+              // Low 12V voltage guard (< 11.8V indicates weak battery or ignition OFF)
               if (volts > 0 && volts < 11.8) {
                 setBatteryGuardActive(true);
-                addLog('info', `[Battery Guard] 12V battery is low (${volts}V). Pausing polling to avoid battery drain.`);
-                // Pause for 10 seconds before re-checking
+                addLog('info', `[Battery Guard] 12V battery is low (${volts}V). Pausing polling to protect battery.`);
                 await new Promise((r) => setTimeout(r, 10000));
                 continue;
               } else {
@@ -332,74 +397,187 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               }
             }
           } catch {
-            // AT RV check failed, continue
+            // continue
           }
         }
 
-        const cmd = commandsToPoll[cmdIndex % commandsToPoll.length];
-        cmdIndex++;
+        // 2. Tiered selection: Fast signals every cycle; slow signals every 3rd cycle
+        const dueCommands = commandsToPoll.filter((cmd) => {
+          if (unsupportedSignalsRef.current.has(cmd.id)) return false;
+          if (isFastSignal(cmd)) return true;
+          return loopCounter % 3 === 0;
+        });
 
-        // Step 4: Gracefully skip signals known to be unsupported by this vehicle
-        if (unsupportedSignalsRef.current.has(cmd.id)) {
-          await new Promise((r) => setTimeout(r, 40));
+        if (dueCommands.length === 0) {
+          // If no slow signals are due, pick one fast command or sleep briefly
+          await new Promise((r) => setTimeout(r, 20));
           continue;
         }
 
-        try {
-          // Switch header if necessary (e.g. 7E4 for battery vs 7E0 standard)
-          if (cmd.header && cmd.header !== activeHeaderRef.current) {
-            await service.sendCommand(`AT SH ${cmd.header}`, 1500);
-            activeHeaderRef.current = cmd.header;
-          }
+        const caps = capabilitiesRef.current;
+        const supportsCount = caps ? caps.supportsResponseCount : true;
 
-          // Send PID (staggered with 2000ms timeout)
-          const response = await service.sendCommand(cmd.modePid, 2000);
+        // 3. Check for standard Mode 01 multi-PID batching (up to 6 PIDs per query)
+        const mode01Candidates = dueCommands.filter(
+          (c) => /^01[0-9A-Fa-f]{2}$/i.test(c.modePid) && (!c.header || c.header === '7E0')
+        );
 
-          // Step 4: Check if vehicle does not support this signal (NO DATA / 7F negative response)
-          if (isUnsupportedResponse(response)) {
-            unsupportedSignalsRef.current.add(cmd.id);
-            setUnsupportedSignals(new Set(unsupportedSignalsRef.current));
-            addLog('info', `[ECU] Signal "${cmd.commandName}" (${cmd.modePid}) not supported by vehicle. Disabled retry.`);
-            continue;
-          }
+        const batchedHandledIds = new Set<string>();
 
-          // Parse and evaluate response
-          const val = parseAndEvaluateResponse(response, cmd.modePid, cmd.formula, cmd.obdbFmt);
+        if (batchingSupported && mode01Candidates.length >= 2) {
+          const batchSlice = mode01Candidates.slice(0, 6);
+          const pidsOnly = batchSlice.map((c) => c.modePid.slice(2).toUpperCase());
+          const batchedWireCmd = `01 ${pidsOnly.join(' ')}${supportsCount ? ' 1' : ''}`;
 
-          if (val !== null) {
-            const now = Date.now();
-            setLiveValues((prev) => {
-              const updated = { ...prev, [cmd.id]: val };
-              // Also map to any widget that points to this signal or suffix
-              widgets.forEach((w) => {
-                if (w.signalSourceId && (w.signalSourceId === cmd.id || cmd.id.endsWith(w.signalSourceId.replace(/^[^_]+_/, '')))) {
-                  updated[w.signalSourceId] = val;
+          try {
+            // Ensure header is standard 7E0
+            if (activeHeaderRef.current !== '7E0') {
+              await service.sendCommand('AT SH 7E0', 1000);
+              activeHeaderRef.current = '7E0';
+            }
+
+            const batchResp = await service.sendCommand(batchedWireCmd, 1500);
+
+            if (isUnsupportedResponse(batchResp) || batchResp.includes('?')) {
+              // Adapter or ECU rejected batch query -> revert to single PIDs
+              batchingSupported = false;
+              addLog('info', '[Clone Notice] Mode 01 batching unsupported, reverting to single PID queries.');
+            } else {
+              // Parse each PID from batched response
+              const tokens = batchResp.split(/\s+/).filter((t) => /^[0-9A-Fa-f]{2,3}$/.test(t));
+              const echoIdx = tokens.findIndex((t) => t.toUpperCase() === '41');
+
+              if (echoIdx !== -1) {
+                let tokenPos = echoIdx + 1;
+                while (tokenPos < tokens.length) {
+                  const pidToken = tokens[tokenPos].toUpperCase();
+                  const expectedLen = MODE_01_PID_LENGTHS[pidToken] || 1;
+                  const matchedCmd = batchSlice.find((c) => c.modePid.slice(2).toUpperCase() === pidToken);
+
+                  if (matchedCmd && tokenPos + expectedLen < tokens.length) {
+                    const dataBytes = tokens
+                      .slice(tokenPos + 1, tokenPos + 1 + expectedLen)
+                      .map((h) => parseInt(h, 16));
+
+                    // Evaluate and publish telemetry point
+                    let parsedVal: number | null = null;
+                    try {
+                      if (matchedCmd.obdbFmt) {
+                        const decoded = decodeOBDbSignal(matchedCmd.obdbFmt, dataBytes);
+                        parsedVal = isNaN(decoded.value) || !isFinite(decoded.value) ? null : decoded.value;
+                      } else {
+                        parsedVal = evaluateFormula(matchedCmd.formula, dataBytes);
+                      }
+                    } catch {
+                      parsedVal = null;
+                    }
+
+                    if (parsedVal !== null) {
+                      publishTelemetry(matchedCmd.id, parsedVal);
+                      batchedHandledIds.add(matchedCmd.id);
+                    }
+                  }
+                  tokenPos += 1 + expectedLen;
                 }
-              });
-              return updated;
-            });
-
-            setHistoryBuffers((prev) => {
-              const existing = prev[cmd.id] || [];
-              const updated = [...existing, { timestamp: now, value: val }].slice(-MAX_HISTORY_POINTS);
-              const result = { ...prev, [cmd.id]: updated };
-              widgets.forEach((w) => {
-                if (w.signalSourceId && (w.signalSourceId === cmd.id || cmd.id.endsWith(w.signalSourceId.replace(/^[^_]+_/, '')))) {
-                  result[w.signalSourceId] = updated;
-                }
-              });
-              return result;
-            });
-          }
-        } catch (err: any) {
-          if (err.message && err.message.includes('Timeout')) {
-            console.warn(`Polling timeout on ${cmd.commandName}:`, err.message);
+              }
+            }
+          } catch {
+            batchingSupported = false;
           }
         }
 
-        // Step 4: Poll gently — 100ms inter-command stagger for CAN arbitration
-        await new Promise((r) => setTimeout(r, 100));
+        // 4. Poll remaining individual commands
+        for (const cmd of dueCommands) {
+          if (cancel || !isPollingRef.current || !service.isConnected()) break;
+          if (batchedHandledIds.has(cmd.id)) continue;
+          if (unsupportedSignalsRef.current.has(cmd.id)) continue;
+
+          try {
+            // Header management (cache active header; only send AT SH when it changes)
+            if (cmd.header && cmd.header !== activeHeaderRef.current) {
+              await service.sendCommand(`AT SH ${cmd.header}`, 1000);
+              activeHeaderRef.current = cmd.header;
+
+              // Optional AT CRA filter for STN adapters
+              if (caps?.supportsCRA && !caps.unsupportedCommands.has('AT CRA') && cmd.header.length === 3) {
+                const reqNum = parseInt(cmd.header, 16);
+                if (!isNaN(reqNum)) {
+                  const respNum = (reqNum + 8).toString(16).toUpperCase();
+                  try {
+                    const craResp = await service.sendCommand(`AT CRA ${respNum}`, 800);
+                    if (craResp.includes('?')) {
+                      caps.unsupportedCommands.add('AT CRA');
+                    }
+                  } catch {
+                    caps.unsupportedCommands.add('AT CRA');
+                  }
+                }
+              }
+            }
+
+            // Construct wire command with single response-count optimization if supported
+            let wireCmd = formatWireCommand(cmd.modePid, caps ? caps.supportsResponseCount : true);
+            let response = await service.sendCommand(wireCmd, 1500);
+
+            // Clone tolerance: if adapter returned '?', disable response count and retry
+            if (response.includes('?') && wireCmd !== cmd.modePid) {
+              if (caps) caps.supportsResponseCount = false;
+              addLog('info', '[Clone Notice] Trailing response count not supported, using standard format.');
+              wireCmd = cmd.modePid;
+              response = await service.sendCommand(wireCmd, 1500);
+            }
+
+            // Check if vehicle ECU does not support this signal (NO DATA / 7F negative response)
+            if (isUnsupportedResponse(response)) {
+              unsupportedSignalsRef.current.add(cmd.id);
+              setUnsupportedSignals(new Set(unsupportedSignalsRef.current));
+              addLog('info', `[ECU] Signal "${cmd.commandName}" (${cmd.modePid}) not supported by vehicle.`);
+              continue;
+            }
+
+            // Parse response
+            const val = parseAndEvaluateResponse(response, cmd.modePid, cmd.formula, cmd.obdbFmt);
+            if (val !== null) {
+              publishTelemetry(cmd.id, val);
+            }
+          } catch (err: any) {
+            if (err.message && err.message.includes('Timeout')) {
+              console.warn(`Polling timeout on ${cmd.commandName}:`, err.message);
+            }
+          }
+
+          // Small prompt-driven inter-command pause (12ms) for CAN bus arbitration
+          await new Promise((r) => setTimeout(r, 12));
+        }
+
+        // Small pause before next cycle
+        await new Promise((r) => setTimeout(r, 15));
       }
+    };
+
+    const publishTelemetry = (cmdId: string, val: number) => {
+      const now = Date.now();
+      setLiveValues((prev) => {
+        const updated = { ...prev, [cmdId]: val };
+        widgets.forEach((w) => {
+          if (w.signalSourceId && (w.signalSourceId === cmdId || cmdId.endsWith(w.signalSourceId.replace(/^[^_]+_/, '')))) {
+            updated[w.signalSourceId] = val;
+          }
+        });
+        return updated;
+      });
+
+      setHistoryBuffers((prev) => {
+        const existing = prev[cmdId] || [];
+        const updated = [...existing, { timestamp: now, value: val }].slice(-MAX_HISTORY_POINTS);
+        const result = { ...prev, [cmdId]: updated };
+        widgets.forEach((w) => {
+          if (w.signalSourceId && (w.signalSourceId === cmdId || cmdId.endsWith(w.signalSourceId.replace(/^[^_]+_/, '')))) {
+            result[w.signalSourceId] = updated;
+          }
+        });
+        return result;
+      });
     };
 
     pollLoop();
@@ -432,6 +610,7 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         connectClassic,
         connectUSB,
         connectSerial,
+        forgetSavedDevices,
         disconnect,
         quickReconnect,
         sendManualCommand,

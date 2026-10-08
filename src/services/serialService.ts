@@ -1,27 +1,31 @@
 import type { ATLogEntry } from '../types/ble';
 import { validateCommandSafety } from './obdbParser';
+import { executeAdapterInit, type OBDTransport, type AdapterCapabilities } from './adapterInit';
 
 export type SerialLogCallback = (entry: Omit<ATLogEntry, 'id' | 'timestamp'>) => void;
 
 /**
  * SerialOBDService
- * Implements communication over the Web Serial API (Chrome 117+ on Mac, Windows, Linux, Android).
- * Specifically supports:
+ * Implements prompt-driven communication over the Web Serial API (Chrome 117+ on Mac, Windows, Linux, Android).
+ * Supports:
  * - OBDLink MX+ (Bluetooth 3.0 Classic SPP / RFCOMM)
  * - OBDLink LX, OBDLink EX (USB), vLinker FD+ / MC+
  * - Generic Bluetooth Classic ELM327 adapters
  * - USB OBD-II diagnostic cables (FTDI, CH340, CP2102)
  */
-export class SerialOBDService {
+export class SerialOBDService implements OBDTransport {
   private port: any = null;
   private reader: any = null;
   private keepReading = false;
   private readPromise: Promise<void> | null = null;
 
   private receiveBuffer = '';
+  private pendingCmd: string | null = null;
   private pendingResolver: ((response: string) => void) | null = null;
   private pendingRejecter: ((err: Error) => void) | null = null;
   private commandTimeoutTimer: any = null;
+
+  private capabilities: AdapterCapabilities | null = null;
 
   private onLog: SerialLogCallback | null = null;
   private onDisconnectCallback: (() => void) | null = null;
@@ -39,11 +43,18 @@ export class SerialOBDService {
     return !!(this.port && this.port.readable && this.port.writable);
   }
 
+  public getCapabilities(): AdapterCapabilities | null {
+    return this.capabilities;
+  }
+
   public getDeviceName(): string {
+    if (this.capabilities?.identity && this.capabilities.identity !== 'ELM327 Compatible') {
+      return this.capabilities.identity;
+    }
     if (!this.port) return 'OBDLink MX+ / Bluetooth Classic / Serial';
     const info = this.port.getInfo ? this.port.getInfo() : {};
     if (info.bluetoothServiceClassId) {
-      return 'OBDLink MX+ (Bluetooth Classic SPP)';
+      return 'OBDLink MX+ (Bluetooth Classic)';
     }
     if (info.usbVendorId) {
       return `USB OBD Adapter (VID: 0x${info.usbVendorId.toString(16).toUpperCase()})`;
@@ -51,37 +62,103 @@ export class SerialOBDService {
     return 'OBDLink MX+ / Serial OBD-II Adapter';
   }
 
-  public async connect(subMode: 'classic' | 'usb' | 'all' = 'all', targetBaudRate = 115200): Promise<void> {
+  /**
+   * Retrieves all ports currently granted permission by the user in this browser origin.
+   */
+  public async getAuthorizedPorts(): Promise<any[]> {
+    if (!this.isSupported()) return [];
+    try {
+      const serialNav = (navigator as any).serial;
+      return (await serialNav.getPorts?.()) || [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Forgets (revokes permissions for) all previously granted serial ports.
+   */
+  public async forgetAllPorts(): Promise<number> {
+    if (!this.isSupported()) return 0;
+    await this.disconnect();
+    const ports = await this.getAuthorizedPorts();
+    let count = 0;
+    for (const p of ports) {
+      try {
+        if (typeof p.forget === 'function') {
+          await p.forget();
+          count++;
+        }
+      } catch (e) {
+        console.warn('Failed to forget serial port:', e);
+      }
+    }
+    this.log('info', `Cleared ${count} saved device permission(s).`);
+    return count;
+  }
+
+  /**
+   * Connect to an OBD adapter via Web Serial.
+   */
+  public async connect(
+    subMode: 'classic' | 'usb' | 'all' = 'all',
+    targetBaudRate = 115200,
+    forceNewDevice = false,
+    profileProtocol?: string
+  ): Promise<AdapterCapabilities> {
     if (!this.isSupported()) {
       throw new Error(
         'Web Serial API is not supported in this browser. Please use Google Chrome, Microsoft Edge, or Opera on Desktop or Android.'
       );
     }
 
+    const serialNav = (navigator as any).serial;
+
+    // Check if we can reuse an already authorized serial port without re-opening the chooser
+    if (!forceNewDevice) {
+      const authorizedPorts = await this.getAuthorizedPorts();
+      // Filter for connected ports if supported by modern Chromium (port.connected !== false)
+      const connectedPorts = authorizedPorts.filter((p: any) => p.connected !== false);
+      if (connectedPorts.length > 0) {
+        const candidate = connectedPorts[connectedPorts.length - 1];
+        this.log('info', 'Connecting to previously authorized serial port...');
+        this.port = candidate;
+        try {
+          return await this.openPort(targetBaudRate, profileProtocol);
+        } catch (openErr: any) {
+          this.log(
+            'info',
+            `Saved serial port could not be opened (${openErr.message}). Prompting for device selection...`
+          );
+          this.port = null;
+        }
+      } else if (authorizedPorts.length > 0) {
+        this.log(
+          'info',
+          'Previously saved serial port is reported disconnected by OS. Prompting for device selection...'
+        );
+      }
+    }
+
     const promptMsg =
       subMode === 'usb'
         ? 'Prompting for USB OBD-II cable (OBDLink EX/SX, FTDI, CH340)...'
-        : subMode === 'classic'
-        ? 'Prompting for Bluetooth Classic SPP adapter (OBDLink MX+, LX, vLinker)...'
-        : 'Prompting for Bluetooth Classic / Serial port (OBDLink MX+, LX, vLinker, USB OBD cables)...';
+        : 'Prompting for serial port (select your OBD adapter, e.g. cu.OBDLinkMX...)...';
 
     this.log('info', promptMsg);
 
-    const serialNav = (navigator as any).serial;
-
     try {
       const requestOptions: any = {};
-      if (subMode === 'classic') {
-        requestOptions.allowedBluetoothServiceClassIds = [
-          '00001101-0000-1000-8000-00805f9b34fb', // Standard Bluetooth Serial Port Profile (SPP)
-          '00001105-0000-1000-8000-00805f9b34fb',
-          '00001106-0000-1000-8000-00805f9b34fb',
-        ];
-      } else if (subMode === 'all') {
-        requestOptions.allowedBluetoothServiceClassIds = [
-          '00001101-0000-1000-8000-00805f9b34fb',
+
+      if (subMode === 'usb') {
+        requestOptions.filters = [
+          { usbVendorId: 0x0403 }, // FTDI
+          { usbVendorId: 0x1a86 }, // WCH CH340
+          { usbVendorId: 0x10c4 }, // Silicon Labs CP210x
+          { usbVendorId: 0x067b }, // Prolific PL2303
         ];
       }
+
       this.port = await serialNav.requestPort(requestOptions);
     } catch (err: any) {
       if (err.name === 'NotFoundError' || err.message?.includes('User cancelled')) {
@@ -94,51 +171,55 @@ export class SerialOBDService {
       throw new Error('No serial port selected');
     }
 
+    return await this.openPort(targetBaudRate, profileProtocol);
+  }
+
+  private async openPort(targetBaudRate: number, profileProtocol?: string): Promise<AdapterCapabilities> {
     this.log('info', `Opening serial communication link at ${targetBaudRate} baud...`);
 
-    try {
-      await this.port.open({
-        baudRate: targetBaudRate, // 115,200 is default for OBDLink MX+, OBDLink EX, and STN chips
-        dataBits: 8,
-        stopBits: 1,
-        parity: 'none',
-        bufferSize: 4096,
-      });
-    } catch (openErr: any) {
-      // If 115200 failed and device might be an older 38400 baud ELM327
-      if (targetBaudRate === 115200) {
-        this.log('info', `115200 baud failed (${openErr.message}). Retrying at 38400 baud...`);
-        try {
-          await this.port.open({
-            baudRate: 38400,
-            dataBits: 8,
-            stopBits: 1,
-            parity: 'none',
-          });
-        } catch (retryErr: any) {
-          throw new Error(`Failed to open serial port: ${retryErr.message}`);
-        }
-      } else {
+    // Guard against calling open() on an already open port
+    if (!this.port.readable) {
+      try {
+        await this.port.open({
+          baudRate: targetBaudRate,
+          dataBits: 8,
+          stopBits: 1,
+          parity: 'none',
+          bufferSize: 8192,
+        });
+      } catch (openErr: any) {
         throw new Error(`Failed to open serial port: ${openErr.message}`);
       }
     }
 
-    // Start asynchronous reading loop
+    // Assert DTR / RTS control signals if supported
+    try {
+      if (typeof this.port.setSignals === 'function') {
+        await this.port.setSignals({ dataTerminalReady: true, requestToSend: true });
+      }
+    } catch {
+      // ignore
+    }
+
+    // Start background reading loop
     this.keepReading = true;
     this.readPromise = this.readLoop();
 
-    this.log('info', 'Serial connection established. Running OBD-II initialization sequence...');
-    await this.runInitSequence();
+    this.log('info', 'Serial stream established. Running fast initialization sequence...');
+    return await this.runInitSequence(profileProtocol);
   }
 
   private async readLoop(): Promise<void> {
     const textDecoder = new TextDecoder();
 
     while (this.port?.readable && this.keepReading) {
+      let activeReader: any = null;
       try {
-        this.reader = this.port.readable.getReader();
-        while (true) {
-          const { value, done } = await this.reader.read();
+        activeReader = this.port.readable.getReader();
+        this.reader = activeReader;
+
+        while (this.keepReading) {
+          const { value, done } = await activeReader.read();
           if (done) break;
           if (value) {
             const chunk = textDecoder.decode(value);
@@ -150,12 +231,14 @@ export class SerialOBDService {
           this.log('error', `Serial stream read error: ${err.message}`);
         }
       } finally {
-        if (this.reader) {
+        if (activeReader) {
           try {
-            this.reader.releaseLock();
+            activeReader.releaseLock();
           } catch {
             // ignore
           }
+        }
+        if (this.reader === activeReader) {
           this.reader = null;
         }
       }
@@ -167,89 +250,46 @@ export class SerialOBDService {
 
     // Response completes when ELM327 prompt '>' character arrives
     if (this.receiveBuffer.includes('>')) {
-      const fullResponse = this.receiveBuffer.replace(/>/g, '').trim();
+      const promptIdx = this.receiveBuffer.indexOf('>');
+      const raw = this.receiveBuffer.slice(0, promptIdx);
+      this.receiveBuffer = this.receiveBuffer.slice(promptIdx + 1);
+
       clearTimeout(this.commandTimeoutTimer);
 
       if (this.pendingResolver) {
         const resolve = this.pendingResolver;
+        const sentCmd = this.pendingCmd;
         this.pendingResolver = null;
         this.pendingRejecter = null;
-        resolve(fullResponse);
+        this.pendingCmd = null;
+
+        // Clean response: strip echo of command if present
+        let cleaned = raw.replace(/\r+/g, '\r').trim();
+        if (sentCmd && sentCmd.length > 0) {
+          const lines = cleaned.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean);
+          if (lines.length > 0 && lines[0].toUpperCase() === sentCmd.toUpperCase()) {
+            cleaned = lines.slice(1).join('\r');
+          }
+        }
+        resolve(cleaned.trim());
       }
-      this.receiveBuffer = '';
     }
   }
 
   /**
-   * OBD-II Initialization Sequence:
-   * 1. AT Z   (Reset controller)
-   * 2. AT E0  (Echo off)
-   * 3. AT SP 6 (ISO 15765-4 CAN 11/500, fallback to AT SP 0 Auto)
-   * 4. AT H1  (Headers on)
+   * Flushes input buffer.
    */
-  public async runInitSequence(): Promise<void> {
-    // 1. Reset
-    this.log('tx', 'AT Z');
-    try {
-      const zResp = await this.sendCommand('AT Z', 4000);
-      this.log('rx', zResp);
-    } catch (err: any) {
-      this.log('error', `Reset (AT Z) failed: ${err.message}`);
-      this.disconnect();
-      throw new Error(`Init command AT Z failed: ${err.message}`);
-    }
-
-    await new Promise((r) => setTimeout(r, 200));
-
-    // 2. Echo Off
-    this.log('tx', 'AT E0');
-    try {
-      const eResp = await this.sendCommand('AT E0', 2500);
-      this.log('rx', eResp);
-    } catch {
-      // Ignore if adapter rejects AT E0
-    }
-
-    // 3. Protocol Select
-    this.log('tx', 'AT SP 6');
-    try {
-      const spResp = await this.sendCommand('AT SP 6', 3000);
-      this.log('rx', spResp);
-      if (spResp.includes('?') || spResp.includes('ERROR')) {
-        this.log('info', 'AT SP 6 rejected. Falling back to AT SP 0 (Auto)...');
-        const autoResp = await this.sendCommand('AT SP 0', 3000);
-        this.log('rx', autoResp);
-      }
-    } catch (err: any) {
-      this.log('error', `Protocol select failed: ${err.message}`);
-      this.disconnect();
-      throw new Error(`Init command AT SP failed: ${err.message}`);
-    }
-
-    // 4. Headers On
-    this.log('tx', 'AT H1');
-    try {
-      const hResp = await this.sendCommand('AT H1', 3000);
-      this.log('rx', hResp);
-    } catch (err: any) {
-      this.log('error', `Headers ON (AT H1) failed: ${err.message}`);
-      this.disconnect();
-      throw new Error(`Init command AT H1 failed: ${err.message}`);
-    }
-
-    this.log('info', 'OBDLink / Serial adapter initialized successfully (CAN protocol active, Headers ON)');
+  public flush(): void {
+    this.receiveBuffer = '';
   }
 
-  public async sendCommand(cmd: string, timeoutMs = 3000): Promise<string> {
+  /**
+   * Raw prompt-driven send implementation.
+   * Flushes input, writes command, awaits prompt '>', strips echo, rejects on timeout.
+   */
+  public async send(cmd: string, timeoutMs = 2500): Promise<string> {
     if (!this.isConnected()) {
       throw new Error('Not connected to serial adapter');
-    }
-
-    // Safety allowlist verification
-    const safety = validateCommandSafety(cmd);
-    if (!safety.allowed) {
-      this.log('error', `[Safety Blocked] ${safety.reason}`);
-      throw new Error(`[OBDb Safety Hard Block] ${safety.reason}`);
     }
 
     if (this.pendingRejecter) {
@@ -257,38 +297,85 @@ export class SerialOBDService {
       this.pendingRejecter(new Error('Cancelled by new command'));
       this.pendingResolver = null;
       this.pendingRejecter = null;
+      this.pendingCmd = null;
     }
 
-    this.receiveBuffer = '';
-    const formattedCmd = cmd.trim() + '\r';
+    // Flush input buffer before each send
+    this.flush();
+    const cleanCmd = cmd.trim();
+    const formattedCmd = cleanCmd === '' ? '\r' : `${cleanCmd}\r`;
     const encoder = new TextEncoder();
     const data = encoder.encode(formattedCmd);
 
     return new Promise<string>(async (resolve, reject) => {
+      this.pendingCmd = cleanCmd;
       this.pendingResolver = resolve;
       this.pendingRejecter = reject;
 
       this.commandTimeoutTimer = setTimeout(() => {
         this.pendingResolver = null;
         this.pendingRejecter = null;
+        this.pendingCmd = null;
         reject(new Error(`Timeout (${timeoutMs}ms) waiting for response to "${cmd}"`));
       }, timeoutMs);
 
+      let writer: any = null;
       try {
-        const writer = this.port.writable.getWriter();
+        writer = this.port.writable.getWriter();
         await writer.write(data);
-        writer.releaseLock();
       } catch (writeErr: any) {
         clearTimeout(this.commandTimeoutTimer);
         this.pendingResolver = null;
         this.pendingRejecter = null;
+        this.pendingCmd = null;
         reject(new Error(`Serial write failed: ${writeErr.message}`));
+      } finally {
+        if (writer) {
+          try {
+            writer.releaseLock();
+          } catch {
+            // ignore
+          }
+        }
       }
     });
   }
 
+  /**
+   * Sends an AT or OBD command with safety allowlist validation.
+   */
+  public async sendCommand(cmd: string, timeoutMs = 2500): Promise<string> {
+    if (!this.isConnected()) {
+      throw new Error('Not connected to serial adapter');
+    }
+
+    const safety = validateCommandSafety(cmd);
+    if (!safety.allowed) {
+      this.log('error', `[Safety Blocked] ${safety.reason}`);
+      throw new Error(`[OBDb Safety Hard Block] ${safety.reason}`);
+    }
+
+    return this.send(cmd, timeoutMs);
+  }
+
+  /**
+   * Executes the fast, robust initialization sequence.
+   */
+  public async runInitSequence(profileProtocol?: string): Promise<AdapterCapabilities> {
+    this.capabilities = await executeAdapterInit(this, profileProtocol);
+    return this.capabilities;
+  }
+
   public async disconnect(): Promise<void> {
     this.keepReading = false;
+
+    if (this.pendingRejecter) {
+      clearTimeout(this.commandTimeoutTimer);
+      this.pendingRejecter(new Error('Serial adapter disconnected'));
+      this.pendingResolver = null;
+      this.pendingRejecter = null;
+      this.pendingCmd = null;
+    }
 
     if (this.reader) {
       try {
@@ -296,12 +383,6 @@ export class SerialOBDService {
       } catch {
         // ignore
       }
-      try {
-        this.reader.releaseLock();
-      } catch {
-        // ignore
-      }
-      this.reader = null;
     }
 
     if (this.readPromise) {
@@ -316,8 +397,8 @@ export class SerialOBDService {
     if (this.port) {
       try {
         await this.port.close();
-      } catch {
-        // ignore
+      } catch (closeErr) {
+        console.warn('Error closing serial port:', closeErr);
       }
       this.port = null;
     }
@@ -330,10 +411,11 @@ export class SerialOBDService {
     if (this.commandTimeoutTimer) clearTimeout(this.commandTimeoutTimer);
     this.pendingResolver = null;
     this.pendingRejecter = null;
+    this.pendingCmd = null;
     this.receiveBuffer = '';
   }
 
-  private log(direction: ATLogEntry['direction'], text: string): void {
+  public log(direction: ATLogEntry['direction'], text: string): void {
     if (this.onLog) {
       this.onLog({ direction, text });
     }
