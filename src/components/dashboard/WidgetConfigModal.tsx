@@ -3,6 +3,7 @@ import type { WidgetConfig, WidgetType, GaugeAccent } from '../../types/telemetr
 import { GAUGE_ACCENT_COLORS } from '../../types/telemetry';
 import { useVehicle } from '../../context/VehicleContext';
 import { IconX, IconCheck } from '@tabler/icons-react';
+import { findCommandForWidget } from '../../services/widgetResolver';
 
 interface WidgetConfigModalProps {
   widget?: WidgetConfig | null; // null if adding new
@@ -21,13 +22,16 @@ export const WidgetConfigModal: React.FC<WidgetConfigModalProps> = ({
 }) => {
   const { availableCommands } = useVehicle();
 
+  const resolvedInitialCmd = findCommandForWidget(widget, availableCommands, slotIndex);
+
   const [type, setType] = useState<WidgetType>(widget?.type || 'gauge');
   const [signalSourceId, setSignalSourceId] = useState<string>(
-    widget?.signalSourceId || availableCommands[0]?.id || ''
+    resolvedInitialCmd?.id || widget?.signalSourceId || availableCommands[0]?.id || ''
   );
 
   // Gauge state
-  const selectedCmd = availableCommands.find((c) => c.id === signalSourceId);
+  const selectedCmd =
+    availableCommands.find((c) => c.id === signalSourceId) || resolvedInitialCmd;
   const [scaleMin, setScaleMin] = useState<number>(
     widget?.scaleMin ?? selectedCmd?.minVal ?? 0
   );

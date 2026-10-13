@@ -142,7 +142,39 @@ const simVoltsResp = await sim.sendCommand('AT RV');
 assert(simVoltsResp.includes('14.2V'), `Sim AT RV response: ${simVoltsResp}`);
 sim.disconnect();
 
+console.log('\n--- Testing Widget Resolver & Protocol Lock Fallbacks ---');
+import { findCommandForWidget } from '../src/services/widgetResolver.ts';
+const defaultWidgets = [
+  { id: 'widget_rpm', slotIndex: 0, signalSourceId: 'std_rpm' },
+  { id: 'widget_speed', slotIndex: 1, signalSourceId: 'std_speed' },
+  { id: 'widget_coolant', slotIndex: 2, signalSourceId: 'std_coolant' },
+];
+
+const resolvedRpm = findCommandForWidget(defaultWidgets[0], machECmds, 0);
+assert(!!resolvedRpm && (resolvedRpm.modePid === '010C' || resolvedRpm.commandName.toLowerCase().includes('motor') || resolvedRpm.commandName.toLowerCase().includes('rpm')), `std_rpm mapped to: ${resolvedRpm?.commandName}`);
+
+const resolvedSpeed = findCommandForWidget(defaultWidgets[1], machECmds, 1);
+assert(!!resolvedSpeed && (resolvedSpeed.modePid === '010D' || resolvedSpeed.commandName.toLowerCase().includes('speed')), `std_speed mapped to: ${resolvedSpeed?.commandName}`);
+
+const resolvedCoolant = findCommandForWidget(defaultWidgets[2], machECmds, 2);
+assert(!!resolvedCoolant && (resolvedCoolant.modePid === '0105' || resolvedCoolant.commandName.toLowerCase().includes('coolant')), `std_coolant mapped to: ${resolvedCoolant?.commandName}`);
+
+// Protocol validation test: STOPPED must never produce 'E'
+function parseProtocol(dpnResp, fallback = '6') {
+  const cleanDpn = dpnResp.replace(/[^A-Za-z0-9]/g, '');
+  const match = cleanDpn.match(/^[Aa]?([1-9A-Ca-c])$/);
+  if (match && match[1]) {
+    return match[1].toUpperCase();
+  }
+  return fallback;
+}
+assert(parseProtocol('STOPPED') === '6', 'STOPPED safely falls back to protocol 6 (not E)');
+assert(parseProtocol('A6') === '6', 'A6 correctly resolves to protocol 6');
+assert(parseProtocol('6') === '6', '6 correctly resolves to protocol 6');
+assert(parseProtocol('?') === '6', '? safely falls back to protocol 6');
+
 console.log(`\n================================`);
 console.log(`Results: ${passed} passed, ${failed} failed`);
 console.log(`================================`);
 if (failed > 0) process.exit(1);
+

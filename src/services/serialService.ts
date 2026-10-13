@@ -42,6 +42,7 @@ export class SerialOBDService implements OBDTransport {
   private autoReconnectAttempts = 0;
   private autoReconnectTimer: any = null;
   private enableSignals = false; // Opt-in DTR/RTS control signals
+  private lastSubMode: 'classic' | 'usb' | 'all' = 'all';
 
   constructor(
     onLog?: SerialLogCallback,
@@ -193,6 +194,11 @@ export class SerialOBDService implements OBDTransport {
         usbVendorId: info.usbVendorId,
         usbProductId: info.usbProductId,
         bluetoothServiceClassId: info.bluetoothServiceClassId,
+        subMode: this.lastSubMode,
+        isBluetooth:
+          this.lastSubMode === 'classic' ||
+          !!info.bluetoothServiceClassId ||
+          (!info.usbVendorId && !info.usbProductId),
       })
     );
   }
@@ -211,6 +217,8 @@ export class SerialOBDService implements OBDTransport {
         'Web Serial API is not supported in this browser. Please use Google Chrome, Microsoft Edge, or Opera on Desktop or Android.'
       );
     }
+
+    this.lastSubMode = subMode;
 
     // P1: Never leave the port open or locked after a failure
     if (this.port) {
@@ -245,6 +253,10 @@ export class SerialOBDService implements OBDTransport {
             }
             if (lastDevice.usbVendorId && info.usbVendorId === lastDevice.usbVendorId) {
               return !lastDevice.usbProductId || info.usbProductId === lastDevice.usbProductId;
+            }
+            // Bluetooth Classic on macOS exposes virtual RFCOMM ports without usbVendorId
+            if (lastDevice.isBluetooth && (!info.usbVendorId || !info.usbProductId)) {
+              return true;
             }
             return false;
           });
@@ -306,7 +318,10 @@ export class SerialOBDService implements OBDTransport {
   private async openPort(targetBaudRate: number, profileProtocol?: string): Promise<AdapterCapabilities> {
     try {
       const info = this.port.getInfo ? this.port.getInfo() : {};
-      const isBluetooth = !!info.bluetoothServiceClassId;
+      const isBluetooth =
+        this.lastSubMode === 'classic' ||
+        !!info.bluetoothServiceClassId ||
+        (!info.usbVendorId && !info.usbProductId);
 
       if (isBluetooth) {
         this.log('info', `[Serial Port Open] Opening Bluetooth Classic port at ${targetBaudRate} baud...`);
@@ -635,6 +650,9 @@ export class SerialOBDService implements OBDTransport {
     if (lastDeviceStr) {
       try {
         const lastDevice = JSON.parse(lastDeviceStr);
+        if (lastDevice.subMode) {
+          this.lastSubMode = lastDevice.subMode;
+        }
         candidate = authorizedPorts.find((p: any) => {
           const info = p.getInfo ? p.getInfo() : {};
           if (
@@ -645,6 +663,9 @@ export class SerialOBDService implements OBDTransport {
           }
           if (lastDevice.usbVendorId && info.usbVendorId === lastDevice.usbVendorId) {
             return !lastDevice.usbProductId || info.usbProductId === lastDevice.usbProductId;
+          }
+          if (lastDevice.isBluetooth && (!info.usbVendorId || !info.usbProductId)) {
+            return true;
           }
           return false;
         });
@@ -664,7 +685,7 @@ export class SerialOBDService implements OBDTransport {
     }
 
     this.port = candidate;
-    const proto = profileProtocol || this.lastProfileProtocol;
+    const proto = profileProtocol || this.lastProfileProtocol || '6';
     const info = this.port.getInfo ? this.port.getInfo() : {};
     const cachedBaud = this.getCachedBaud(info) || 115200;
 

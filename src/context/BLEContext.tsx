@@ -10,6 +10,8 @@ import { useWidgets } from './WidgetContext';
 import { parseAndEvaluateResponse, isUnsupportedResponse } from '../services/obdParser';
 import { validateCommandSafety, decodeOBDbSignal } from '../services/obdbParser';
 import { evaluateFormula } from '../services/formulaParser';
+import { findCommandForWidget } from '../services/widgetResolver';
+import { VEHICLE_DEFINITIONS } from '../data/defaultVehicles';
 
 interface BLEContextType {
   status: BLEConnectionStatus;
@@ -216,7 +218,20 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       try {
         let caps: AdapterCapabilities | null = null;
-        const profileProto = activeVehicle?.protocol || undefined;
+        const profileProto =
+          activeVehicle?.protocol ||
+          VEHICLE_DEFINITIONS.find((v) => v.name === activeVehicle?.name)?.protocol ||
+          '6';
+
+        // Clear any previous session unsupported signals, resetting all widgets fresh
+        unsupportedSignalsRef.current.clear();
+        setUnsupportedSignals(new Set());
+        setLiveValues({});
+        setHistoryBuffers({});
+        activeHeaderRef.current = null;
+        pollRunRef.current++;
+        setBatteryGuardActive(false);
+        setBatteryVoltage12V(null);
 
         if (isSerialKind && serialServiceRef.current) {
           const subMode = targetMode === 'classic' ? 'classic' : targetMode === 'usb' ? 'usb' : 'all';
@@ -284,6 +299,11 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setStatus('disconnected');
     setDeviceName(null);
     isPollingRef.current = false;
+    unsupportedSignalsRef.current.clear();
+    setUnsupportedSignals(new Set());
+    setLiveValues({});
+    setBatteryGuardActive(false);
+    setBatteryVoltage12V(null);
   }, []);
 
   const quickReconnect = useCallback(async () => {
@@ -293,7 +313,21 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!service) return;
 
     try {
-      const profileProto = activeVehicle?.protocol || undefined;
+      const profileProto =
+        activeVehicle?.protocol ||
+        VEHICLE_DEFINITIONS.find((v) => v.name === activeVehicle?.name)?.protocol ||
+        '6';
+
+      // Clear unsupported blacklist and reset widget live telemetry buffers fresh
+      unsupportedSignalsRef.current.clear();
+      setUnsupportedSignals(new Set());
+      setLiveValues({});
+      setHistoryBuffers({});
+      activeHeaderRef.current = null;
+      pollRunRef.current++;
+      setBatteryGuardActive(false);
+      setBatteryVoltage12V(null);
+
       let caps: AdapterCapabilities | null = null;
       if (service instanceof SerialOBDService) {
         caps = await service.reconnect(profileProto);
@@ -361,16 +395,10 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 2. Custom commands if drawer is open
     const activeCommandIds = new Set<string>();
 
-    widgets.forEach((w) => {
-      if (w.signalSourceId) {
-        const directCmd = availableCommands.find((c) => c.id === w.signalSourceId);
-        if (directCmd) {
-          activeCommandIds.add(directCmd.id);
-        } else {
-          const rawSig = w.signalSourceId.replace(/^[^_]+_/, '');
-          const fallback = availableCommands.find((c) => c.id.endsWith(rawSig) || c.modePid === w.signalSourceId);
-          if (fallback) activeCommandIds.add(fallback.id);
-        }
+    widgets.forEach((w, idx) => {
+      const cmd = findCommandForWidget(w, availableCommands, idx);
+      if (cmd) {
+        activeCommandIds.add(cmd.id);
       }
     });
 
@@ -380,7 +408,16 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .forEach((c) => activeCommandIds.add(c.id));
     }
 
-    const commandsToPoll = availableCommands.filter((c) => activeCommandIds.has(c.id));
+    let commandsToPoll = availableCommands.filter((c) => activeCommandIds.has(c.id));
+
+    // If no widgets matched or commands are empty, fall back to standard core PIDs
+    // so adapter polling is active, LEDs blink, and live data requests flow!
+    if (commandsToPoll.length === 0) {
+      const starterPids = ['010C', '010D', '0105'];
+      const starterCmds = availableCommands.filter((c) => starterPids.includes(c.modePid));
+      commandsToPoll = starterCmds.length > 0 ? starterCmds : availableCommands.slice(0, 3);
+    }
+
     if (commandsToPoll.length === 0) {
       return;
     }
@@ -647,9 +684,11 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const now = Date.now();
       setLiveValues((prev) => {
         const updated = { ...prev, [cmdId]: val };
-        widgets.forEach((w) => {
-          if (w.signalSourceId && (w.signalSourceId === cmdId || cmdId.endsWith(w.signalSourceId.replace(/^[^_]+_/, '')))) {
-            updated[w.signalSourceId] = val;
+        widgets.forEach((w, idx) => {
+          const matched = findCommandForWidget(w, availableCommands, idx);
+          if (matched && matched.id === cmdId) {
+            if (w.signalSourceId) updated[w.signalSourceId] = val;
+            updated[w.id] = val;
           }
         });
         return updated;
@@ -659,9 +698,11 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const existing = prev[cmdId] || [];
         const updated = [...existing, { timestamp: now, value: val }].slice(-MAX_HISTORY_POINTS);
         const result = { ...prev, [cmdId]: updated };
-        widgets.forEach((w) => {
-          if (w.signalSourceId && (w.signalSourceId === cmdId || cmdId.endsWith(w.signalSourceId.replace(/^[^_]+_/, '')))) {
-            result[w.signalSourceId] = updated;
+        widgets.forEach((w, idx) => {
+          const matched = findCommandForWidget(w, availableCommands, idx);
+          if (matched && matched.id === cmdId) {
+            if (w.signalSourceId) result[w.signalSourceId] = updated;
+            result[w.id] = updated;
           }
         });
         return result;

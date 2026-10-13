@@ -36,7 +36,21 @@ export const BLEConnectionView: React.FC<BLEConnectionViewProps> = ({ onNavigate
     isSerialSupported,
   } = useBLE();
 
-  const [selectedMode, setSelectedMode] = useState<ConnectionMode>('ble');
+  const [selectedMode, setSelectedModeState] = useState<ConnectionMode>(() => {
+    if (typeof localStorage !== 'undefined') {
+      const saved = localStorage.getItem('obd_connection_mode') as ConnectionMode;
+      if (saved && (saved === 'ble' || saved === 'classic' || saved === 'usb')) return saved;
+    }
+    const isMobile = typeof navigator !== 'undefined' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    return isMobile ? 'ble' : 'classic';
+  });
+
+  const setSelectedMode = (mode: ConnectionMode) => {
+    setSelectedModeState(mode);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('obd_connection_mode', mode);
+    }
+  };
 
   // When offline simulation is enabled, automatically switch connection mode to BLE
   React.useEffect(() => {
@@ -183,6 +197,16 @@ export const BLEConnectionView: React.FC<BLEConnectionViewProps> = ({ onNavigate
             <IconInfoCircle size={18} className="ios-note-icon" />
             <span>
               <strong>iPhone &amp; iPad Notice:</strong> On iPhones and iPads, only <strong>BLE</strong> (Bluetooth Low Energy) is supported via Web BLE browsers like <em>Bluefy</em>. Bluetooth Classic and USB require desktop Chrome or Edge.
+            </span>
+          </div>
+        )}
+
+        {/* macOS OBDLink MX+ Tip */}
+        {!isSimulated && (
+          <div className="connection-ios-note" style={{ marginTop: 8 }}>
+            <IconInfoCircle size={18} className="ios-note-icon" />
+            <span>
+              <strong>macOS OBDLink MX+ Tip:</strong> Pair your adapter in <strong>macOS System Settings &gt; Bluetooth</strong> first, then select <strong>Bluetooth</strong> to choose your <code>cu.OBDLinkMX...</code> serial port.
             </span>
           </div>
         )}

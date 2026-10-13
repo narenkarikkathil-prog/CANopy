@@ -183,34 +183,26 @@ export async function executeAdapterInit(
   stageTimings['config'] = Math.round(performance.now() - tConfigStart);
 
   // -------------------------------------------------------------
-  // 5. Protocol Negotiation: Profile Protocol or AT SP 0 + 0100
+  // 5. Protocol Negotiation: Profile Protocol or Auto-Search Lock-in
   // -------------------------------------------------------------
   const tProtoStart = performance.now();
-  let lockedProtocol = '6';
-
   const cleanProfileProto = profileProtocol
-    ? profileProtocol.replace(/^AT\s*SP\s*/i, '').trim()
-    : '';
+    ? profileProtocol.replace(/^AT\s*SP\s*/i, '').trim().toUpperCase()
+    : '6'; // Default to ISO 15765-4 CAN 11/500 (Protocol 6 standard across all modern vehicles)
 
-  if (cleanProfileProto) {
-    // Use active profile's specified protocol
-    transport.log('tx', `AT SP ${cleanProfileProto}`);
-    try {
-      const spResp = await transport.send(`AT SP ${cleanProfileProto}`, 1500);
-      transport.log('rx', spResp);
-      if (spResp.includes('?') || spResp.includes('ERROR')) {
-        transport.log('info', `AT SP ${cleanProfileProto} rejected. Falling back to auto-search...`);
-        lockedProtocol = await detectAndLockProtocol(transport);
-      } else {
-        lockedProtocol = cleanProfileProto;
-      }
-    } catch {
-      transport.log('info', 'Protocol selection timed out. Falling back to auto-search...');
-      lockedProtocol = await detectAndLockProtocol(transport);
+  let lockedProtocol = cleanProfileProto || '6';
+
+  transport.log('tx', `AT SP ${lockedProtocol}`);
+  try {
+    const spResp = await transport.send(`AT SP ${lockedProtocol}`, 1500);
+    transport.log('rx', spResp);
+    if (spResp.includes('?') || spResp.includes('ERROR')) {
+      transport.log('info', `AT SP ${lockedProtocol} rejected. Falling back to auto-search...`);
+      lockedProtocol = await detectAndLockProtocol(transport, lockedProtocol);
     }
-  } else {
-    // No profile protocol provided: auto-search with 0100 & lock protocol
-    lockedProtocol = await detectAndLockProtocol(transport);
+  } catch {
+    transport.log('info', 'Protocol selection timed out. Falling back to auto-search...');
+    lockedProtocol = await detectAndLockProtocol(transport, lockedProtocol);
   }
 
   stageTimings['protocol'] = Math.round(performance.now() - tProtoStart);
@@ -313,8 +305,9 @@ export async function executeAdapterInit(
 
 /**
  * Searches and locks in the active protocol via AT SP 0, 0100, and AT DPN.
+ * Falls back safely to ISO 15765-4 CAN 11/500 ('6') if search stops or times out.
  */
-async function detectAndLockProtocol(transport: OBDTransport): Promise<string> {
+async function detectAndLockProtocol(transport: OBDTransport, fallbackProto = '6'): Promise<string> {
   // 1. Set auto protocol
   transport.log('tx', 'AT SP 0');
   try {
@@ -324,29 +317,37 @@ async function detectAndLockProtocol(transport: OBDTransport): Promise<string> {
     // continue
   }
 
-  // 2. Transmit standard Mode 01 PID 00 to trigger bus search
+  // 2. Transmit standard Mode 01 PID 00 to trigger bus search (give 5000ms for protocol search)
   transport.log('tx', '0100');
   try {
-    const p00Resp = await transport.send('0100', 3000);
+    const p00Resp = await transport.send('0100', 5000);
     transport.log('rx', p00Resp);
   } catch {
-    transport.log('info', '0100 probe timed out during protocol search');
+    transport.log('info', '0100 probe timed out during protocol search, querying active protocol...');
   }
 
   // 3. Read detected protocol number
   transport.log('tx', 'AT DPN');
-  let detected = '6'; // Default fallback to ISO 15765-4 CAN 11/500
+  let detected = fallbackProto;
   try {
     const dpnResp = await transport.send('AT DPN', 1200);
     transport.log('rx', dpnResp);
     const cleanDpn = dpnResp.replace(/[^A-Za-z0-9]/g, '');
-    // If e.g. "A6", the protocol is "6"
-    const match = cleanDpn.match(/[A-Z]?([0-9A-Fa-f])/);
+
+    // Valid protocols: 1-9, A, B, C (optionally prefixed by 'A' for Auto, e.g. 'A6')
+    // Must NOT match words like 'STOPPED', 'AUTO', etc.
+    const match = cleanDpn.match(/^[Aa]?([1-9A-Ca-c])$/);
     if (match && match[1]) {
-      detected = match[1];
+      detected = match[1].toUpperCase();
+    } else {
+      transport.log(
+        'info',
+        `Protocol auto-detection returned "${dpnResp.trim() || cleanDpn}". Falling back to ISO 15765-4 CAN 11/500 (Protocol ${fallbackProto}).`
+      );
+      detected = fallbackProto;
     }
   } catch {
-    // keep default '6'
+    detected = fallbackProto;
   }
 
   // 4. Lock in protocol

@@ -7,6 +7,7 @@ import { WidgetConfigModal } from './WidgetConfigModal';
 import { CustomCommandDrawer } from './CustomCommandDrawer';
 import { IconPlus } from '@tabler/icons-react';
 import type { WidgetConfig } from '../../types/telemetry';
+import { findCommandForWidget } from '../../services/widgetResolver';
 
 export const DashboardView: React.FC = () => {
   const { widgets, maxWidgets, addWidget, updateWidget, removeWidget } = useWidgets();
@@ -50,16 +51,14 @@ export const DashboardView: React.FC = () => {
       <div className="widget-grid" role="region" aria-label="Telemetry Widgets Grid">
         {slots.map((widget, slotIdx) => {
           if (widget) {
-            const command =
-              availableCommands.find((c) => c.id === widget.signalSourceId) ||
-              availableCommands.find((c) => c.id.endsWith(widget.signalSourceId.replace(/^[^_]+_/, ''))) ||
-              availableCommands.find((c) => c.modePid === widget.signalSourceId) ||
-              (slotIdx === 0 ? availableCommands.find((c) => c.modePid === '010C' || c.commandName.includes('RPM')) : undefined) ||
-              (slotIdx === 1 ? availableCommands.find((c) => c.modePid === '010D' || c.commandName.includes('Speed')) : undefined) ||
-              (slotIdx === 2 ? availableCommands.find((c) => c.modePid === '0105' || c.commandName.includes('Coolant')) : undefined);
+            const command = findCommandForWidget(widget, availableCommands, slotIdx);
             const resolvedId = command?.id || widget.signalSourceId;
-            const value = resolvedId ? liveValues[resolvedId] ?? liveValues[widget.signalSourceId] ?? null : null;
-            const history = resolvedId ? historyBuffers[resolvedId] ?? historyBuffers[widget.signalSourceId] ?? [] : [];
+            const value = resolvedId
+              ? liveValues[resolvedId] ?? liveValues[widget.signalSourceId] ?? liveValues[widget.id] ?? null
+              : null;
+            const history = resolvedId
+              ? historyBuffers[resolvedId] ?? historyBuffers[widget.signalSourceId] ?? historyBuffers[widget.id] ?? []
+              : [];
 
             return (
               <div key={widget.id} className="widget-slot slot-filled">
