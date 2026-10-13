@@ -1,5 +1,7 @@
 import React from 'react';
 import type { WidgetConfig, OBDCommand } from '../../../types/telemetry';
+import { GAUGE_ACCENT_COLORS } from '../../../types/telemetry';
+import { resolveDisplayValueAndUnit, convertTelemetryValue } from '../../../services/widgetResolver';
 
 interface GaugeWidgetProps {
   widget: WidgetConfig;
@@ -8,10 +10,16 @@ interface GaugeWidgetProps {
 }
 
 export const GaugeWidget: React.FC<GaugeWidgetProps> = ({ widget, command, value }) => {
-  const min = widget.scaleMin !== undefined ? widget.scaleMin : command?.minVal ?? 0;
-  const max = widget.scaleMax !== undefined ? widget.scaleMax : command?.maxVal ?? 100;
+  const { displayVal, formatted: formattedValue, unit: displayUnit } =
+    resolveDisplayValueAndUnit(value, widget, command?.units);
 
-  const displayVal = value !== null ? value : null;
+  const rawMin = command?.minVal ?? 0;
+  const rawMax = command?.maxVal ?? 100;
+  const convertedMin = convertTelemetryValue(rawMin, command?.units, widget.unitOverride).value ?? rawMin;
+  const convertedMax = convertTelemetryValue(rawMax, command?.units, widget.unitOverride).value ?? rawMax;
+  const min = widget.scaleMin !== undefined ? widget.scaleMin : Math.round(convertedMin);
+  const max = widget.scaleMax !== undefined ? widget.scaleMax : Math.round(convertedMax);
+
   const clampedVal =
     displayVal !== null ? Math.min(Math.max(displayVal, min), max) : min;
 
@@ -28,31 +36,26 @@ export const GaugeWidget: React.FC<GaugeWidgetProps> = ({ widget, command, value
   const ratio = max > min ? (clampedVal - min) / (max - min) : 0;
   const strokeOffset = arcLength * (1 - Math.max(0, Math.min(1, ratio)));
 
-  // Format numerical value nicely
-  const formattedValue =
-    displayVal !== null
-      ? displayVal >= 1000
-        ? Math.round(displayVal).toLocaleString()
-        : Math.abs(displayVal) < 10 && displayVal % 1 !== 0
-        ? displayVal.toFixed(1)
-        : Math.round(displayVal).toString()
-      : '—';
-
+  const accent = GAUGE_ACCENT_COLORS[widget.accentColor || 'neon-green'] || GAUGE_ACCENT_COLORS['neon-green'];
+  const accentHex = accent.hex;
   const gradId = `gaugeGrad_${widget.id}`;
 
   return (
-    <div className="gauge-widget-container">
-      {/* Metric Label (Serif) */}
+    <div className="gauge-widget-container" style={{ '--widget-accent': accentHex } as React.CSSProperties}>
+      {/* Metric Label (Serif with accent dot) */}
       <div className="gauge-header">
-        <span className="widget-metric-label">{command?.commandName || 'Engine RPM'}</span>
+        <div className="metric-label-with-accent">
+          <span className="accent-indicator-dot" style={{ backgroundColor: accentHex }} />
+          <span className="widget-metric-label">{command?.commandName || 'Engine RPM'}</span>
+        </div>
       </div>
 
       <div className="gauge-svg-wrapper">
         <svg viewBox="0 0 200 120" className="gauge-svg" aria-hidden="true">
           <defs>
             <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor="#CDB494" />
-              <stop offset="100%" stopColor={isWarning ? 'var(--error)' : '#BC9A70'} />
+              <stop offset="0%" stopColor={accentHex} stopOpacity="0.45" />
+              <stop offset="100%" stopColor={isWarning ? 'var(--error)' : accentHex} stopOpacity="1" />
             </linearGradient>
           </defs>
 
@@ -92,8 +95,8 @@ export const GaugeWidget: React.FC<GaugeWidgetProps> = ({ widget, command, value
         <div className="gauge-center-readout">
           <div className="metric-value-row">
             <span className="metric-large-value tabular-nums">{formattedValue}</span>
-            {command?.units && (
-              <span className="metric-unit-text">{command.units}</span>
+            {displayUnit && (
+              <span className="metric-unit-text">{displayUnit}</span>
             )}
           </div>
         </div>

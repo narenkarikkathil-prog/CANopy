@@ -1,5 +1,7 @@
 import React, { useMemo } from 'react';
 import type { WidgetConfig, OBDCommand, TelemetryPoint } from '../../../types/telemetry';
+import { GAUGE_ACCENT_COLORS } from '../../../types/telemetry';
+import { resolveDisplayValueAndUnit, convertTelemetryValue } from '../../../services/widgetResolver';
 
 interface LineGraphWidgetProps {
   widget: WidgetConfig;
@@ -17,12 +19,17 @@ export const LineGraphWidget: React.FC<LineGraphWidgetProps> = ({
   const isAuto = widget.scalingMode !== 'manual';
   const timeWindowSec = widget.xAxisWindow || 30; // default 30 seconds
 
-  // Filter history to time window
+  // Filter history to time window and apply unit conversion if configured
   const visiblePoints = useMemo(() => {
     if (!history || history.length === 0) return [];
     const cutoff = Date.now() - timeWindowSec * 1000;
-    return history.filter((p) => p.timestamp >= cutoff);
-  }, [history, timeWindowSec]);
+    const filtered = history.filter((p) => p.timestamp >= cutoff);
+    if (!widget.unitOverride) return filtered;
+    return filtered.map((p) => ({
+      timestamp: p.timestamp,
+      value: convertTelemetryValue(p.value, command?.units, widget.unitOverride).value ?? p.value,
+    }));
+  }, [history, timeWindowSec, widget.unitOverride, command?.units]);
 
   // Determine Y-axis Min & Max
   const { yMin, yMax } = useMemo(() => {
@@ -31,7 +38,11 @@ export const LineGraphWidget: React.FC<LineGraphWidgetProps> = ({
     }
 
     if (visiblePoints.length === 0) {
-      return { yMin: command?.minVal ?? 0, yMax: command?.maxVal ?? 100 };
+      const rawMin = command?.minVal ?? 0;
+      const rawMax = command?.maxVal ?? 100;
+      const cMin = convertTelemetryValue(rawMin, command?.units, widget.unitOverride).value ?? rawMin;
+      const cMax = convertTelemetryValue(rawMax, command?.units, widget.unitOverride).value ?? rawMax;
+      return { yMin: Math.round(cMin), yMax: Math.round(cMax) };
     }
 
     let min = Infinity;
@@ -52,7 +63,7 @@ export const LineGraphWidget: React.FC<LineGraphWidgetProps> = ({
     }
 
     return { yMin: min, yMax: max };
-  }, [isAuto, widget.yAxisMin, widget.yAxisMax, visiblePoints, command]);
+  }, [isAuto, widget.yAxisMin, widget.yAxisMax, visiblePoints, command, widget.unitOverride]);
 
   // SVG Geometry
   const width = 320;
@@ -94,27 +105,28 @@ export const LineGraphWidget: React.FC<LineGraphWidgetProps> = ({
     return { linePath: lPath, areaPath: aPath, lastPoint: lastPt };
   }, [visiblePoints, timeWindowSec, yMin, yMax, graphWidth, graphHeight]);
 
-  const formattedVal =
-    value !== null
-      ? Math.abs(value) < 10 && value % 1 !== 0
-        ? value.toFixed(1)
-        : Math.round(value).toString()
-      : '—';
+  const { formatted: formattedVal, unit: displayUnit } =
+    resolveDisplayValueAndUnit(value, widget, command?.units);
 
+  const accent = GAUGE_ACCENT_COLORS[widget.accentColor || 'cyan'] || GAUGE_ACCENT_COLORS['cyan'];
+  const accentHex = accent.hex;
   const gradId = `speedGrad_${widget.id}`;
 
   return (
-    <div className="line-graph-widget-container">
+    <div className="line-graph-widget-container" style={{ '--widget-accent': accentHex } as React.CSSProperties}>
       {/* Metric Header (Serif title + value row, keeping top-right free from kebab overlap) */}
       <div className="line-graph-header">
         <div className="line-graph-header-left">
-          <span className="widget-metric-label">{command?.commandName || 'Vehicle Speed'}</span>
+          <div className="metric-label-with-accent">
+            <span className="accent-indicator-dot" style={{ backgroundColor: accentHex }} />
+            <span className="widget-metric-label">{command?.commandName || 'Vehicle Speed'}</span>
+          </div>
           <div className="metric-value-row">
             <span className="metric-large-value tabular-nums">{formattedVal}</span>
-            {command?.units && (
-              <span className="metric-unit-text">{command.units}</span>
+            {displayUnit && (
+              <span className="metric-unit-text">{displayUnit}</span>
             )}
-            <span className="scale-mode-faint-tag">
+            <span className="scale-mode-faint-tag" style={{ color: accentHex, borderColor: `${accentHex}40` }}>
               {isAuto ? 'auto' : `${timeWindowSec}s`}
             </span>
           </div>
@@ -126,8 +138,8 @@ export const LineGraphWidget: React.FC<LineGraphWidgetProps> = ({
         <svg viewBox={`0 0 ${width} ${height}`} className="line-graph-svg">
           <defs>
             <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.22" />
-              <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.0" />
+              <stop offset="0%" stopColor={accentHex} stopOpacity="0.28" />
+              <stop offset="100%" stopColor={accentHex} stopOpacity="0.0" />
             </linearGradient>
           </defs>
 
@@ -162,12 +174,12 @@ export const LineGraphWidget: React.FC<LineGraphWidgetProps> = ({
           {/* Soft gradient fill fading to transparent */}
           {areaPath && <path d={areaPath} fill={`url(#${gradId})`} />}
 
-          {/* 1.5px --accent stroke */}
+          {/* 1.5px accent stroke */}
           {linePath && (
             <path
               d={linePath}
               fill="none"
-              stroke="var(--accent)"
+              stroke={accentHex}
               strokeWidth="1.5"
               strokeLinejoin="round"
               strokeLinecap="round"
@@ -180,7 +192,7 @@ export const LineGraphWidget: React.FC<LineGraphWidgetProps> = ({
               cx={lastPoint.x}
               cy={lastPoint.y}
               r="2.5"
-              fill="var(--accent)"
+              fill={accentHex}
             />
           )}
 

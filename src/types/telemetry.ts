@@ -49,15 +49,24 @@ export interface VehicleProfile {
   protocol?: string; // e.g. "6" for ISO 15765-4 CAN 11/500
 }
 
+export type PrecisionOption = 'auto' | 'sig2' | 'sig3' | 'sig4' | 'dec0' | 'dec1' | 'dec2' | 'dec3';
+
 export interface WidgetConfig {
   id: string;
   slotIndex: number; // 0 to 4 (max 5 widgets)
   type: WidgetType;
   signalSourceId: string; // OBDCommand.id
+  // Number precision & significant figures
+  precision?: PrecisionOption;
+  sigFigs?: number | 'auto';
+  decimalPlaces?: number | 'auto';
+  // Unit conversion (e.g. 'mph' instead of 'km/h', '°F' instead of '°C')
+  unitOverride?: string;
+  // Accent & visual styling
+  accentColor?: GaugeAccent;
   // Gauge specific
   scaleMin?: number;
   scaleMax?: number;
-  accentColor?: GaugeAccent;
   // Line graph specific
   scalingMode?: 'auto' | 'manual';
   xAxisWindow?: number; // seconds (e.g. 30, 60)

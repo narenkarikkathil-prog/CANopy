@@ -1,5 +1,7 @@
 import React from 'react';
 import type { WidgetConfig, OBDCommand } from '../../../types/telemetry';
+import { GAUGE_ACCENT_COLORS } from '../../../types/telemetry';
+import { resolveDisplayValueAndUnit } from '../../../services/widgetResolver';
 
 interface NumericWidgetProps {
   widget: WidgetConfig;
@@ -7,28 +9,27 @@ interface NumericWidgetProps {
   value: number | null;
 }
 
-export const NumericWidget: React.FC<NumericWidgetProps> = ({ command, value }) => {
-  const displayVal = value !== null ? value : null;
+export const NumericWidget: React.FC<NumericWidgetProps> = ({ widget, command, value }) => {
+  const { displayVal, formatted: formattedVal, unit: displayUnit } =
+    resolveDisplayValueAndUnit(value, widget, command?.units);
 
-  // Real warnings only (e.g. coolant overheating > 105°C)
+  // Real warnings only (e.g. coolant overheating > 105°C or > 221°F)
+  const isOverheatingThreshold = displayUnit?.toLowerCase().includes('f') ? 221 : 105;
   const isOverheating =
     displayVal !== null &&
     (command?.modePid === '0105' || command?.commandName.toLowerCase().includes('coolant')) &&
-    displayVal >= 105;
+    displayVal >= isOverheatingThreshold;
 
-  const formattedVal =
-    displayVal !== null
-      ? displayVal >= 1000
-        ? Math.round(displayVal).toLocaleString()
-        : Math.abs(displayVal) < 10 && displayVal % 1 !== 0
-        ? displayVal.toFixed(1)
-        : Math.round(displayVal).toString()
-      : '—';
+  const accent = GAUGE_ACCENT_COLORS[widget.accentColor || 'amber'] || GAUGE_ACCENT_COLORS['amber'];
+  const accentHex = accent.hex;
 
   return (
-    <div className="numeric-widget-container">
+    <div className="numeric-widget-container" style={{ '--widget-accent': accentHex } as React.CSSProperties}>
       <div className="numeric-header">
-        <span className="widget-metric-label">{command?.commandName || 'Coolant Temp'}</span>
+        <div className="metric-label-with-accent">
+          <span className="accent-indicator-dot" style={{ backgroundColor: accentHex }} />
+          <span className="widget-metric-label">{command?.commandName || 'Coolant Temp'}</span>
+        </div>
       </div>
 
       <div className="metric-value-row">
@@ -37,8 +38,8 @@ export const NumericWidget: React.FC<NumericWidgetProps> = ({ command, value }) 
         >
           {formattedVal}
         </span>
-        {command?.units && (
-          <span className="metric-unit-text">{command.units}</span>
+        {displayUnit && (
+          <span className="metric-unit-text">{displayUnit}</span>
         )}
       </div>
 

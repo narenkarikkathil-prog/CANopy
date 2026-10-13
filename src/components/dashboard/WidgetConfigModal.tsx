@@ -1,9 +1,13 @@
 import React, { useState } from 'react';
-import type { WidgetConfig, WidgetType, GaugeAccent } from '../../types/telemetry';
+import type { WidgetConfig, WidgetType, GaugeAccent, PrecisionOption } from '../../types/telemetry';
 import { GAUGE_ACCENT_COLORS } from '../../types/telemetry';
 import { useVehicle } from '../../context/VehicleContext';
 import { IconX, IconCheck } from '@tabler/icons-react';
-import { findCommandForWidget } from '../../services/widgetResolver';
+import {
+  findCommandForWidget,
+  getConvertibleUnitOptions,
+  convertTelemetryValue,
+} from '../../services/widgetResolver';
 
 interface WidgetConfigModalProps {
   widget?: WidgetConfig | null; // null if adding new
@@ -28,6 +32,10 @@ export const WidgetConfigModal: React.FC<WidgetConfigModalProps> = ({
   const [signalSourceId, setSignalSourceId] = useState<string>(
     resolvedInitialCmd?.id || widget?.signalSourceId || availableCommands[0]?.id || ''
   );
+
+  // Precision and Unit options
+  const [precision, setPrecision] = useState<PrecisionOption>(widget?.precision || 'auto');
+  const [unitOverride, setUnitOverride] = useState<string>(widget?.unitOverride || '');
 
   // Gauge state
   const selectedCmd =
@@ -64,16 +72,33 @@ export const WidgetConfigModal: React.FC<WidgetConfigModalProps> = ({
     return map;
   }, [availableCommands]);
 
+  const convertibleUnits = React.useMemo(() => {
+    return getConvertibleUnitOptions(selectedCmd?.units);
+  }, [selectedCmd?.units]);
+
   if (!isOpen) return null;
 
   const handleSourceChange = (newSourceId: string) => {
     setSignalSourceId(newSourceId);
+    setUnitOverride(''); // Reset unit conversion when changing metric
     const cmd = availableCommands.find((c) => c.id === newSourceId);
     if (cmd) {
       setScaleMin(cmd.minVal);
       setScaleMax(cmd.maxVal);
       setYAxisMin(cmd.minVal);
       setYAxisMax(cmd.maxVal);
+    }
+  };
+
+  const handleUnitChange = (newUnit: string) => {
+    setUnitOverride(newUnit);
+    if (selectedCmd) {
+      const cMin = convertTelemetryValue(selectedCmd.minVal, selectedCmd.units, newUnit).value;
+      const cMax = convertTelemetryValue(selectedCmd.maxVal, selectedCmd.units, newUnit).value;
+      if (cMin !== null) setScaleMin(Math.round(cMin));
+      if (cMax !== null) setScaleMax(Math.round(cMax));
+      if (cMin !== null) setYAxisMin(Math.round(cMin));
+      if (cMax !== null) setYAxisMax(Math.round(cMax));
     }
   };
 
@@ -90,6 +115,8 @@ export const WidgetConfigModal: React.FC<WidgetConfigModalProps> = ({
       xAxisWindow,
       yAxisMin,
       yAxisMax,
+      precision,
+      unitOverride: unitOverride || undefined,
     });
     onClose();
   };
@@ -158,6 +185,28 @@ export const WidgetConfigModal: React.FC<WidgetConfigModalProps> = ({
             </select>
           </div>
 
+          {/* Unit of Measure Conversion Toggle (e.g. km/h vs mph, °C vs °F, psi vs bar vs kPa) */}
+          {convertibleUnits && convertibleUnits.length > 1 && (
+            <div className="form-group">
+              <label className="form-label">Unit of Measure</label>
+              <div className="segmented-control">
+                {convertibleUnits.map((u) => {
+                  const isSelected = (unitOverride || selectedCmd?.units) === u;
+                  return (
+                    <button
+                      key={u}
+                      type="button"
+                      className={isSelected ? 'active' : ''}
+                      onClick={() => handleUnitChange(u)}
+                    >
+                      {u}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Mode Specific Settings: GAUGE */}
           {type === 'gauge' && (
             <div className="mode-specific-fields">
@@ -179,30 +228,6 @@ export const WidgetConfigModal: React.FC<WidgetConfigModalProps> = ({
                     onChange={(e) => setScaleMax(parseFloat(e.target.value) || 100)}
                     required
                   />
-                </div>
-              </div>
-
-              {/* 5-Swatch Accent Picker */}
-              <div className="form-group">
-                <label className="form-label">Accent Color</label>
-                <div className="swatch-picker">
-                  {(Object.keys(GAUGE_ACCENT_COLORS) as GaugeAccent[]).map((key) => {
-                    const swatch = GAUGE_ACCENT_COLORS[key];
-                    const isSelected = accentColor === key;
-                    return (
-                      <button
-                        key={key}
-                        type="button"
-                        className={`swatch-button ${isSelected ? 'selected' : ''}`}
-                        style={{ backgroundColor: swatch.hex }}
-                        onClick={() => setAccentColor(key)}
-                        title={swatch.name}
-                        aria-label={`Select ${swatch.name} accent`}
-                      >
-                        {isSelected && <IconCheck size={16} stroke={3} color="#2A2A24" />}
-                      </button>
-                    );
-                  })}
                 </div>
               </div>
             </div>
@@ -283,6 +308,51 @@ export const WidgetConfigModal: React.FC<WidgetConfigModalProps> = ({
               )}
             </div>
           )}
+
+          {/* Significant Figures & Precision */}
+          <div className="form-group">
+            <label className="form-label" htmlFor="precision-select">
+              Significant Figures & Precision
+            </label>
+            <select
+              id="precision-select"
+              value={precision}
+              onChange={(e) => setPrecision(e.target.value as PrecisionOption)}
+            >
+              <option value="auto">Auto (Default formatting)</option>
+              <option value="sig2">2 Significant Figures (e.g. 14, 1.4, 0.14)</option>
+              <option value="sig3">3 Significant Figures (e.g. 143, 14.3, 1.43)</option>
+              <option value="sig4">4 Significant Figures (e.g. 1432, 143.2, 14.32)</option>
+              <option value="dec0">0 Decimals (Integer, e.g. 14)</option>
+              <option value="dec1">1 Decimal Place (e.g. 14.3)</option>
+              <option value="dec2">2 Decimal Places (e.g. 14.32)</option>
+              <option value="dec3">3 Decimal Places (e.g. 14.325)</option>
+            </select>
+          </div>
+
+          {/* 5-Swatch Accent Color Picker (Universal for all widget types) */}
+          <div className="form-group">
+            <label className="form-label">Accent Color</label>
+            <div className="swatch-picker">
+              {(Object.keys(GAUGE_ACCENT_COLORS) as GaugeAccent[]).map((key) => {
+                const swatch = GAUGE_ACCENT_COLORS[key];
+                const isSelected = accentColor === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`swatch-button ${isSelected ? 'selected' : ''}`}
+                    style={{ backgroundColor: swatch.hex }}
+                    onClick={() => setAccentColor(key)}
+                    title={swatch.name}
+                    aria-label={`Select ${swatch.name} accent`}
+                  >
+                    {isSelected && <IconCheck size={16} stroke={3} color="#2A2A24" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
           {/* Modal Actions */}
           <div className="modal-actions">

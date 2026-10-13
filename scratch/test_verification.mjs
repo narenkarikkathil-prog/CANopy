@@ -173,6 +173,41 @@ assert(parseProtocol('A6') === '6', 'A6 correctly resolves to protocol 6');
 assert(parseProtocol('6') === '6', '6 correctly resolves to protocol 6');
 assert(parseProtocol('?') === '6', '? safely falls back to protocol 6');
 
+console.log('\n--- Testing Significant Figures & Unit Conversions ---');
+import {
+  formatWithSigFigs,
+  formatWithDecimals,
+  convertTelemetryValue,
+  resolveDisplayValueAndUnit,
+  getConvertibleUnitOptions,
+} from '../src/services/widgetResolver.ts';
+
+// 1. Sig Figs tests
+assert(formatWithSigFigs(1234, 3) === '1,230', `SigFigs 1234 (3 figs) -> ${formatWithSigFigs(1234, 3)} (expected 1,230)`);
+assert(formatWithSigFigs(14.28, 3) === '14.3', `SigFigs 14.28 (3 figs) -> ${formatWithSigFigs(14.28, 3)} (expected 14.3)`);
+assert(formatWithSigFigs(14.28, 2) === '14', `SigFigs 14.28 (2 figs) -> ${formatWithSigFigs(14.28, 2)} (expected 14)`);
+assert(formatWithSigFigs(0.04567, 3) === '0.0457', `SigFigs 0.04567 (3 figs) -> ${formatWithSigFigs(0.04567, 3)} (expected 0.0457)`);
+assert(formatWithSigFigs(0, 3) === '0', `SigFigs 0 -> ${formatWithSigFigs(0, 3)} (expected 0)`);
+
+// 2. Unit conversion tests
+const kmhToMph = convertTelemetryValue(100, 'km/h', 'mph');
+assert(Math.abs(kmhToMph.value - 62.1371) < 0.01, `100 km/h -> ${kmhToMph.value} mph`);
+assert(kmhToMph.unit === 'mph', 'Result unit is mph');
+
+const cToF = convertTelemetryValue(90, '°C', '°F');
+assert(Math.abs(cToF.value - 194) < 0.01, `90 °C -> ${cToF.value} °F`);
+assert(cToF.unit === '°F', 'Result unit is °F');
+
+const speedOptions = getConvertibleUnitOptions('km/h');
+assert(Array.isArray(speedOptions) && speedOptions.includes('mph') && speedOptions.includes('km/h'), 'km/h offers mph and km/h');
+
+const tempOptions = getConvertibleUnitOptions('°C');
+assert(Array.isArray(tempOptions) && tempOptions.includes('°F') && tempOptions.includes('°C'), '°C offers °F and °C');
+
+const resolved = resolveDisplayValueAndUnit(100, { precision: 'sig3', unitOverride: 'mph' }, 'km/h');
+assert(resolved.formatted === '62.1', `100 km/h with sig3 + mph -> ${resolved.formatted} (expected 62.1)`);
+assert(resolved.unit === 'mph', 'Resolved unit is mph');
+
 console.log(`\n================================`);
 console.log(`Results: ${passed} passed, ${failed} failed`);
 console.log(`================================`);

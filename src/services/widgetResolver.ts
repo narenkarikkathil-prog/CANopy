@@ -108,3 +108,178 @@ export function findCommandForWidget(
 
   return undefined;
 }
+
+/**
+ * Formats a number with a specific number of significant figures,
+ * avoiding awkward scientific notation (e.g. 1200 instead of 1.2e+3).
+ */
+export function formatWithSigFigs(num: number, sigFigs: number): string {
+  if (num === 0) return '0';
+  const sign = num < 0 ? '-' : '';
+  const abs = Math.abs(num);
+  const d = Math.floor(Math.log10(abs)) + 1;
+  const power = sigFigs - d;
+  const magnitude = 10 ** power;
+  const rounded = Math.round(abs * magnitude) / magnitude;
+
+  if (rounded >= 1000 && Number.isInteger(rounded)) {
+    return sign + rounded.toLocaleString();
+  }
+  const decimals = Math.max(0, power);
+  return sign + rounded.toFixed(decimals);
+}
+
+/**
+ * Formats a number with fixed decimal places.
+ */
+export function formatWithDecimals(num: number, decimals: number): string {
+  if (Math.abs(num) >= 1000 && decimals === 0) {
+    return Math.round(num).toLocaleString();
+  }
+  return num.toFixed(decimals);
+}
+
+/**
+ * Formats a telemetry numerical value based on widget config preferences.
+ */
+export function formatTelemetryValue(
+  value: number | null | undefined,
+  config?: Partial<WidgetConfig>
+): string {
+  if (value === null || value === undefined || isNaN(value)) {
+    return '—';
+  }
+
+  // 1. Explicit sigFigs
+  if (config?.sigFigs && config.sigFigs !== 'auto') {
+    return formatWithSigFigs(value, config.sigFigs);
+  }
+
+  // 2. Explicit decimalPlaces
+  if (config?.decimalPlaces !== undefined && config.decimalPlaces !== 'auto') {
+    return formatWithDecimals(value, config.decimalPlaces);
+  }
+
+  // 3. Combined precision option
+  if (config?.precision && config.precision !== 'auto') {
+    switch (config.precision) {
+      case 'sig2':
+        return formatWithSigFigs(value, 2);
+      case 'sig3':
+        return formatWithSigFigs(value, 3);
+      case 'sig4':
+        return formatWithSigFigs(value, 4);
+      case 'dec0':
+        return formatWithDecimals(value, 0);
+      case 'dec1':
+        return formatWithDecimals(value, 1);
+      case 'dec2':
+        return formatWithDecimals(value, 2);
+      case 'dec3':
+        return formatWithDecimals(value, 3);
+    }
+  }
+
+  // 4. Default / auto formatting
+  if (Math.abs(value) >= 1000) {
+    return Math.round(value).toLocaleString();
+  }
+  if (Math.abs(value) < 10 && value % 1 !== 0) {
+    return value.toFixed(1);
+  }
+  return Number.isInteger(value) ? value.toString() : value.toFixed(1);
+}
+
+/**
+ * Detects if a unit is convertible and returns the available toggle choices.
+ * E.g. "km/h" -> ["km/h", "mph"]
+ *      "°C"   -> ["°C", "°F"]
+ *      "kPa"  -> ["kPa", "psi", "bar"]
+ */
+export function getConvertibleUnitOptions(sourceUnit?: string): string[] | null {
+  if (!sourceUnit) return null;
+  const clean = sourceUnit.trim().toLowerCase();
+  if (clean === 'km/h' || clean === 'kph' || clean === 'kmh') return ['km/h', 'mph'];
+  if (clean === 'mph') return ['mph', 'km/h'];
+  if (clean === '°c' || clean === 'c' || clean === 'deg c' || clean === 'celsius') return ['°C', '°F'];
+  if (clean === '°f' || clean === 'f' || clean === 'deg f' || clean === 'fahrenheit') return ['°F', '°C'];
+  if (clean === 'kpa') return ['kPa', 'psi', 'bar'];
+  if (clean === 'psi') return ['psi', 'bar', 'kPa'];
+  if (clean === 'bar') return ['bar', 'psi', 'kPa'];
+  if (clean === 'kw') return ['kW', 'hp'];
+  if (clean === 'hp') return ['hp', 'kW'];
+  if (clean === 'nm') return ['Nm', 'lb-ft'];
+  if (clean === 'lb-ft' || clean === 'lbft' || clean === 'ft-lb') return ['lb-ft', 'Nm'];
+  return null;
+}
+
+/**
+ * Converts a numerical telemetry value from sourceUnit to targetUnit.
+ */
+export function convertTelemetryValue(
+  value: number | null | undefined,
+  sourceUnit?: string,
+  targetUnit?: string
+): { value: number | null; unit: string } {
+  const origUnit = sourceUnit || '';
+  if (value === null || value === undefined || isNaN(value)) {
+    return { value: null, unit: targetUnit || origUnit };
+  }
+  if (!targetUnit || targetUnit === origUnit) {
+    return { value, unit: origUnit };
+  }
+
+  const s = origUnit.trim().toLowerCase();
+  const t = targetUnit.trim().toLowerCase();
+
+  // Speed
+  if ((s === 'km/h' || s === 'kph' || s === 'kmh') && t === 'mph') {
+    return { value: value * 0.621371, unit: targetUnit };
+  }
+  if (s === 'mph' && (t === 'km/h' || t === 'kph')) {
+    return { value: value * 1.60934, unit: targetUnit };
+  }
+
+  // Temperature
+  if ((s === '°c' || s === 'c') && (t === '°f' || t === 'f')) {
+    return { value: (value * 9) / 5 + 32, unit: targetUnit };
+  }
+  if ((s === '°f' || s === 'f') && (t === '°c' || t === 'c')) {
+    return { value: ((value - 32) * 5) / 9, unit: targetUnit };
+  }
+
+  // Pressure
+  if (s === 'kpa' && t === 'psi') return { value: value * 0.145038, unit: targetUnit };
+  if (s === 'kpa' && t === 'bar') return { value: value / 100, unit: targetUnit };
+  if (s === 'bar' && t === 'psi') return { value: value * 14.5038, unit: targetUnit };
+  if (s === 'bar' && t === 'kpa') return { value: value * 100, unit: targetUnit };
+  if (s === 'psi' && t === 'bar') return { value: value / 14.5038, unit: targetUnit };
+  if (s === 'psi' && t === 'kpa') return { value: value / 0.145038, unit: targetUnit };
+
+  // Power
+  if (s === 'kw' && t === 'hp') return { value: value * 1.34102, unit: targetUnit };
+  if (s === 'hp' && t === 'kw') return { value: value / 1.34102, unit: targetUnit };
+
+  // Torque
+  if (s === 'nm' && (t === 'lb-ft' || t === 'lbft')) return { value: value * 0.737562, unit: targetUnit };
+  if ((s === 'lb-ft' || s === 'lbft') && t === 'nm') return { value: value / 0.737562, unit: targetUnit };
+
+  return { value, unit: targetUnit };
+}
+
+/**
+ * Resolves both unit conversion and formatted text for display in widgets.
+ */
+export function resolveDisplayValueAndUnit(
+  rawVal: number | null | undefined,
+  config?: Partial<WidgetConfig>,
+  sourceUnit?: string
+): { displayVal: number | null; formatted: string; unit: string } {
+  const converted = convertTelemetryValue(rawVal, sourceUnit, config?.unitOverride);
+  const formatted = formatTelemetryValue(converted.value, config);
+  return {
+    displayVal: converted.value,
+    formatted,
+    unit: converted.unit,
+  };
+}
