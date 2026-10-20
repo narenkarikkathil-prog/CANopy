@@ -6,8 +6,6 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "predeploy": "npm run build",
-    "deploy": "gh-pages -d dist",
     "lint": "oxlint",
     "preview": "vite preview"
   },
@@ -23,7 +21,6 @@
     "@types/react-dom": "^18.3.7",
     "@types/web-bluetooth": "^0.0.21",
     "@vitejs/plugin-react": "^6.1.1",
-    "gh-pages": "^6.3.0",
     "oxlint": "^1.81.0",
     "typescript": "~6.0.2",
     "vite": "^8.3.0"
