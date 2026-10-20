@@ -10,8 +10,6 @@ import {
   IconPower,
   IconCpu,
   IconCheck,
-  IconAlertTriangle,
-  IconInfoCircle,
   IconTrash,
 } from '@tabler/icons-react';
 
@@ -19,7 +17,7 @@ interface BLEConnectionViewProps {
   onNavigateToHelp?: () => void;
 }
 
-export const BLEConnectionView: React.FC<BLEConnectionViewProps> = ({ onNavigateToHelp }) => {
+export const BLEConnectionView: React.FC<BLEConnectionViewProps> = () => {
   const {
     status,
     connectionType,
@@ -52,7 +50,6 @@ export const BLEConnectionView: React.FC<BLEConnectionViewProps> = ({ onNavigate
     }
   };
 
-  // When offline simulation is enabled, automatically switch connection mode to BLE
   React.useEffect(() => {
     if (isSimulated) {
       setSelectedMode('ble');
@@ -76,13 +73,13 @@ export const BLEConnectionView: React.FC<BLEConnectionViewProps> = ({ onNavigate
       const count = await forgetSavedDevices();
       setForgetNotice(
         count > 0
-          ? `Cleared ${count} saved device permission(s). You can select your adapter cleanly.`
+          ? `Cleared ${count} saved device permission(s).`
           : 'No saved devices found in browser permissions.'
       );
-      setTimeout(() => setForgetNotice(null), 5000);
+      setTimeout(() => setForgetNotice(null), 4000);
     } catch (err: any) {
       setForgetNotice(`Failed to clear: ${err.message}`);
-      setTimeout(() => setForgetNotice(null), 5000);
+      setTimeout(() => setForgetNotice(null), 4000);
     }
   };
 
@@ -93,23 +90,23 @@ export const BLEConnectionView: React.FC<BLEConnectionViewProps> = ({ onNavigate
 
   return (
     <div className="ble-view-container">
-      {/* Primary Connection Status Card */}
+      {/* Primary Connection Card */}
       <div className="card ble-card">
         <div className="ble-card-header">
           <div className="ble-header-info">
             <div className={`ble-header-icon-box status-${status}`}>
-              {connectionType === 'usb' ? (
-                <IconDeviceUsb size={28} />
-              ) : connectionType === 'classic' || connectionType === 'serial' ? (
-                <IconPlugConnected size={28} />
+              {connectionType === 'usb' || selectedMode === 'usb' ? (
+                <IconDeviceUsb size={26} />
+              ) : connectionType === 'classic' || selectedMode === 'classic' ? (
+                <IconPlugConnected size={26} />
               ) : (
-                <IconBluetooth size={28} />
+                <IconBluetooth size={26} />
               )}
             </div>
             <div>
-              <h2 className="section-title serif-heading">OBD-II Wireless &amp; Serial Interface</h2>
+              <h2 className="section-title serif-heading">OBD-II Connection</h2>
               <p className="section-subtitle">
-                Connect your vehicle adapter via Bluetooth LE, Bluetooth Classic, or USB Serial
+                Connect via BLE, BT, or USB
               </p>
             </div>
           </div>
@@ -154,125 +151,49 @@ export const BLEConnectionView: React.FC<BLEConnectionViewProps> = ({ onNavigate
                   ? isSimulated
                     ? 'Simulated Adapter Active'
                     : deviceName
-                    ? `${deviceName} (${connectionType === 'usb' ? 'USB' : connectionType === 'classic' ? 'BT Classic' : 'BLE'})`
+                    ? `${deviceName} (${connectionType === 'usb' ? 'USB' : connectionType === 'classic' ? 'BT' : 'BLE'})`
                     : 'Adapter Connected'
                   : status === 'connecting'
-                  ? 'Connecting & Initializing...'
+                  ? 'Connecting...'
                   : 'Disconnected'}
               </span>
             </span>
           </div>
         </div>
 
-        {/* Init Sequence Protocol Flow Display */}
-        <div className="ble-protocol-steps">
-          <div className="protocol-step">
-            <span className="step-num">1</span>
-            <span className="step-cmd">\r / AT WS</span>
-            <span className="step-desc">Sync &amp; Warm Start</span>
-          </div>
-          <div className="protocol-step-arrow">→</div>
-          <div className="protocol-step">
-            <span className="step-num">2</span>
-            <span className="step-cmd">AT E0 / H1</span>
-            <span className="step-desc">Echo Off &amp; Headers</span>
-          </div>
-          <div className="protocol-step-arrow">→</div>
-          <div className="protocol-step">
-            <span className="step-num">3</span>
-            <span className="step-cmd">AT SP 6</span>
-            <span className="step-desc">Protocol Lock-in</span>
-          </div>
-          <div className="protocol-step-arrow">→</div>
-          <div className="protocol-step">
-            <span className="step-num">4</span>
-            <span className="step-cmd">ATI / STI</span>
-            <span className="step-desc">Caps &amp; STN Probe</span>
-          </div>
-        </div>
-
-        {/* Clean iPhone / iOS Notice */}
-        {!isSimulated && (
-          <div className="connection-ios-note">
-            <IconInfoCircle size={18} className="ios-note-icon" />
-            <span>
-              <strong>iPhone &amp; iPad Notice:</strong> On iPhones and iPads, only <strong>BLE</strong> (Bluetooth Low Energy) is supported via Web BLE browsers like <em>Bluefy</em>. Bluetooth Classic and USB require desktop Chrome or Edge.
-            </span>
-          </div>
-        )}
-
-        {/* macOS OBDLink MX+ Tip */}
-        {!isSimulated && (
-          <div className="connection-ios-note" style={{ marginTop: 8 }}>
-            <IconInfoCircle size={18} className="ios-note-icon" />
-            <span>
-              <strong>macOS OBDLink MX+ Tip:</strong> Pair your adapter in <strong>macOS System Settings &gt; Bluetooth</strong> first, then select <strong>Bluetooth</strong> to choose your <code>cu.OBDLinkMX...</code> serial port.
-            </span>
-          </div>
-        )}
-
-        {/* Browser Support Alerts (if unsupported) */}
-        {!isBLESupported && !isSerialSupported && !isSimulated && (
-          <div className="csv-alert csv-error-box" style={{ marginBottom: 20 }}>
-            <IconAlertTriangle size={20} className="alert-icon" />
-            <div>
-              <strong>Web Bluetooth &amp; Web Serial are not supported in this browser.</strong>
-              <p>
-                Native communication requires Google Chrome, Microsoft Edge, or the Bluefy browser on iOS.
-                You can toggle <strong>Simulate Adapter</strong> below to preview live telemetry immediately.
-              </p>
-            </div>
-          </div>
-        )}
-
         {/* Connection Action Controls */}
         {status === 'disconnected' ? (
           <div className="connection-selector-panel">
             <div className="connection-toggle-row">
-              <span className="connection-toggle-label">Connection Mode:</span>
+              <span className="connection-toggle-label">Mode:</span>
               <div className="segmented-control connection-mode-segmented">
-                {isSimulated ? (
-                  <button
-                    type="button"
-                    className="active"
-                    onClick={() => setSelectedMode('ble')}
-                    title="Simulating a Bluetooth Low Energy (BLE) adapter"
-                  >
-                    <IconBluetooth size={15} style={{ marginRight: 6 }} />
-                    Connect (BLE)
-                  </button>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      className={selectedMode === 'ble' ? 'active' : ''}
-                      onClick={() => setSelectedMode('ble')}
-                    >
-                      <IconBluetooth size={15} style={{ marginRight: 6 }} />
-                      BLE
-                    </button>
-                    <button
-                      type="button"
-                      className={selectedMode === 'classic' ? 'active' : ''}
-                      onClick={() => setSelectedMode('classic')}
-                    >
-                      <IconPlugConnected size={15} style={{ marginRight: 6 }} />
-                      Bluetooth
-                    </button>
-                    <button
-                      type="button"
-                      className={selectedMode === 'usb' ? 'active' : ''}
-                      onClick={() => setSelectedMode('usb')}
-                    >
-                      <IconDeviceUsb size={15} style={{ marginRight: 6 }} />
-                      USB
-                    </button>
-                  </>
-                )}
+                <button
+                  type="button"
+                  className={selectedMode === 'ble' ? 'active' : ''}
+                  onClick={() => setSelectedMode('ble')}
+                >
+                  <IconBluetooth size={15} style={{ marginRight: 6 }} />
+                  BLE
+                </button>
+                <button
+                  type="button"
+                  className={selectedMode === 'classic' ? 'active' : ''}
+                  onClick={() => setSelectedMode('classic')}
+                >
+                  <IconPlugConnected size={15} style={{ marginRight: 6 }} />
+                  BT
+                </button>
+                <button
+                  type="button"
+                  className={selectedMode === 'usb' ? 'active' : ''}
+                  onClick={() => setSelectedMode('usb')}
+                >
+                  <IconDeviceUsb size={15} style={{ marginRight: 6 }} />
+                  USB
+                </button>
               </div>
             </div>
 
-            {/* Mode-specific hints and connect button */}
             <div className="connection-action-box">
               <div className="connection-buttons-group">
                 <button
@@ -281,9 +202,9 @@ export const BLEConnectionView: React.FC<BLEConnectionViewProps> = ({ onNavigate
                   onClick={() => handleConnect(false)}
                   disabled={!isModeSupported}
                 >
-                  {(!isSimulated && selectedMode === 'classic') ? (
+                  {selectedMode === 'classic' ? (
                     <IconPlugConnected size={20} />
-                  ) : (!isSimulated && selectedMode === 'usb') ? (
+                  ) : selectedMode === 'usb' ? (
                     <IconDeviceUsb size={20} />
                   ) : (
                     <IconBluetooth size={20} />
@@ -292,10 +213,10 @@ export const BLEConnectionView: React.FC<BLEConnectionViewProps> = ({ onNavigate
                     {isSimulated
                       ? 'Connect (BLE)'
                       : selectedMode === 'ble'
-                      ? 'Connect via Bluetooth LE (BLE)'
+                      ? 'Connect (BLE)'
                       : selectedMode === 'classic'
-                      ? 'Connect via Bluetooth Classic (SPP)'
-                      : 'Connect via USB Serial Cable'}
+                      ? 'Connect (BT)'
+                      : 'Connect (USB)'}
                   </span>
                 </button>
 
@@ -308,17 +229,17 @@ export const BLEConnectionView: React.FC<BLEConnectionViewProps> = ({ onNavigate
                       title="Open device chooser to select or pair a new device"
                     >
                       <IconRefresh size={14} />
-                      <span>Select / Pair New Device</span>
+                      <span>Select New Device</span>
                     </button>
 
                     <button
                       type="button"
                       className="connect-sub-btn forget-btn"
                       onClick={handleForgetDevices}
-                      title="Revoke and forget all saved serial/Bluetooth device permissions in this browser"
+                      title="Forget saved serial/Bluetooth device permissions"
                     >
                       <IconTrash size={14} />
-                      <span>Forget Saved Devices</span>
+                      <span>Forget Devices</span>
                     </button>
                   </div>
                 )}
@@ -330,60 +251,7 @@ export const BLEConnectionView: React.FC<BLEConnectionViewProps> = ({ onNavigate
                   <span>{forgetNotice}</span>
                 </div>
               )}
-
-              <div className="connection-mode-desc">
-                {isSimulated ? (
-                  <span>
-                    Simulating a <strong>Bluetooth Low Energy (BLE)</strong> OBD-II adapter with live vehicle telemetry.
-                  </span>
-                ) : selectedMode === 'ble' ? (
-                  <span>
-                    Supported: <strong>OBDLink MX+ (in BLE mode)</strong>, <strong>OBDLink CX</strong>, <strong>Veepeak</strong>, <strong>Vgate</strong>, <strong>Carista</strong>, and iPhone/iPad.
-                  </span>
-                ) : selectedMode === 'classic' ? (
-                  <span>
-                    Supported: <strong>OBDLink MX+</strong>, <strong>OBDLink LX</strong>, <strong>vLinker</strong>. <em>(Pair in OS Bluetooth Settings first).</em>
-                  </span>
-                ) : (
-                  <span>
-                    Supported: <strong>OBDLink EX / SX</strong> and <strong>FTDI / CH340</strong> diagnostic cables on desktop.
-                  </span>
-                )}
-              </div>
-
-              {!isSimulated && selectedMode === 'classic' && (
-                <div className="classic-guide-card">
-                  <div className="classic-guide-header">
-                    <IconInfoCircle size={15} />
-                    <span>macOS Bluetooth Serial Connection Guide</span>
-                  </div>
-                  <ul className="classic-guide-steps">
-                    <li>
-                      <strong>1. Pair in macOS First:</strong> Pair <code>OBDLink MX+</code> in <em>System Settings → Bluetooth</em> so macOS generates the virtual serial port.
-                    </li>
-                    <li>
-                      <strong>2. Select the <code>cu.</code> Port:</strong> In the browser chooser, select <strong>cu.OBDLinkMX...</strong> (do not select <code>cu.Bluetooth-Incoming-Port</code> or <code>debug-console</code>).
-                    </li>
-                    <li>
-                      <strong>3. Clearing Phantom Devices:</strong> If Chrome still shows an old ghost Bluetooth entry from previous sessions, click the tune/lock icon next to the URL in the address bar → <em>Reset permissions</em>, or visit <code>chrome://settings/content/serialPorts</code>.
-                    </li>
-                  </ul>
-                </div>
-              )}
             </div>
-
-            {/* Helper link to Help Section */}
-            {onNavigateToHelp && (
-              <div className="connection-help-link-wrapper">
-                <button
-                  type="button"
-                  className="connection-help-link"
-                  onClick={onNavigateToHelp}
-                >
-                  View full list of supported dongles and hardware setup in Help &amp; Guide →
-                </button>
-              </div>
-            )}
           </div>
         ) : (
           <div className="active-connection-buttons">
@@ -394,7 +262,7 @@ export const BLEConnectionView: React.FC<BLEConnectionViewProps> = ({ onNavigate
               disabled={status === 'connecting'}
             >
               <IconRefresh size={18} />
-              <span>Quick-Reconnect (Re-run Init)</span>
+              <span>Quick-Reconnect</span>
             </button>
             <button
               type="button"
@@ -408,7 +276,7 @@ export const BLEConnectionView: React.FC<BLEConnectionViewProps> = ({ onNavigate
         )}
 
         {/* Simulator Toggle */}
-        <div className="simulator-toggle-wrapper" style={{ marginTop: 22 }}>
+        <div className="simulator-toggle-wrapper" style={{ marginTop: 20 }}>
           <label className="toggle-label" htmlFor="simulator-checkbox">
             <input
               id="simulator-checkbox"

@@ -16,14 +16,14 @@ export const CommandsView: React.FC = () => {
             className={subTab === 'library' ? 'active' : ''}
             onClick={() => setSubTab('library')}
           >
-            Command Library
+            Signal Library
           </button>
           <button
             type="button"
             className={subTab === 'builder' ? 'active' : ''}
             onClick={() => setSubTab('builder')}
           >
-            Create Custom Command
+            Custom Builder
           </button>
           <button
             type="button"

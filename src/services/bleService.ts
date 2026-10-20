@@ -31,7 +31,7 @@ export const ISSC_RX = '49535343-1e4d-4bd9-ba61-23c647249616';
 export const DEVICE_INFO_SERVICE = '0000180a-0000-1000-8000-00805f9b34fb';
 export const BATTERY_SERVICE = '0000180f-0000-1000-8000-00805f9b34fb';
 
-export const ALL_OBD_SERVICES: BluetoothServiceUUID[] = [
+export const ALL_OBD_SERVICES: string[] = [
   NORDIC_UART_SERVICE,
   MICROCHIP_FFF0_SERVICE,
   TI_FFE0_SERVICE,
@@ -39,14 +39,20 @@ export const ALL_OBD_SERVICES: BluetoothServiceUUID[] = [
   FEE7_SERVICE,
   OBDLINK_E781_SERVICE,
   ISSC_SERVICE,
-  0xfff0,
-  0xffe0,
-  0x18f0,
-  0xfee7,
-  0xe781,
-  0x180a,
-  0x180f,
+  DEVICE_INFO_SERVICE,
+  BATTERY_SERVICE,
 ];
+
+export function isIOSDevice(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    /Bluefy/i.test(navigator.userAgent) ||
+    (typeof navigator.platform === 'string' &&
+      navigator.platform === 'MacIntel' &&
+      navigator.maxTouchPoints > 1)
+  );
+}
 
 export type BLELogCallback = (entry: Omit<ATLogEntry, 'id' | 'timestamp'>) => void;
 
@@ -98,54 +104,76 @@ export class BLEService implements OBDTransport {
       );
     }
 
-    this.log('info', 'Scanning for BLE OBD-II adapters (OBDLink CX, Veepeak, Vgate, Carista, Generic BLE)...');
+    const isIOS = isIOSDevice();
+    const stringFilters = [
+      { services: [NORDIC_UART_SERVICE] },
+      { services: [MICROCHIP_FFF0_SERVICE] },
+      { services: [TI_FFE0_SERVICE] },
+      { services: [CARISTA_18F0_SERVICE] },
+      { services: [FEE7_SERVICE] },
+      { services: [OBDLINK_E781_SERVICE] },
+      { services: [ISSC_SERVICE] },
+      { namePrefix: 'OBD' },
+      { namePrefix: 'obd' },
+      { namePrefix: 'OBDLink' },
+      { namePrefix: 'Veepeak' },
+      { namePrefix: 'Vgate' },
+      { namePrefix: 'vLinker' },
+      { namePrefix: 'Carista' },
+      { namePrefix: 'LELink' },
+      { namePrefix: 'UniCarScan' },
+      { namePrefix: 'Konnwei' },
+      { namePrefix: 'Viecar' },
+      { namePrefix: 'IOS-Vlink' },
+      { namePrefix: 'Android-Vlink' },
+      { namePrefix: 'ELM' },
+      { namePrefix: 'iCar' },
+      { namePrefix: 'BT' },
+    ];
 
-    try {
-      this.device = await navigator.bluetooth.requestDevice({
-        filters: [
-          { services: [NORDIC_UART_SERVICE] },
-          { services: [MICROCHIP_FFF0_SERVICE] },
-          { services: [TI_FFE0_SERVICE] },
-          { services: [CARISTA_18F0_SERVICE] },
-          { services: [FEE7_SERVICE] },
-          { services: [OBDLINK_E781_SERVICE] },
-          { services: [ISSC_SERVICE] },
-          { services: [0xfff0] },
-          { services: [0xffe0] },
-          { services: [0x18f0] },
-          { services: [0xfee7] },
-          { namePrefix: 'OBD' },
-          { namePrefix: 'obd' },
-          { namePrefix: 'OBDLink' },
-          { namePrefix: 'Veepeak' },
-          { namePrefix: 'Vgate' },
-          { namePrefix: 'vLinker' },
-          { namePrefix: 'Carista' },
-          { namePrefix: 'LELink' },
-          { namePrefix: 'UniCarScan' },
-          { namePrefix: 'Konnwei' },
-          { namePrefix: 'Viecar' },
-          { namePrefix: 'IOS-Vlink' },
-          { namePrefix: 'Android-Vlink' },
-          { namePrefix: 'ELM' },
-          { namePrefix: 'iCar' },
-          { namePrefix: 'BT' },
-        ],
-        optionalServices: ALL_OBD_SERVICES,
-      });
-    } catch (err: any) {
-      if (err.name === 'NotFoundError' || err.message?.includes('User cancelled')) {
-        throw new Error('Bluetooth device selection cancelled');
-      }
-
-      this.log('info', 'Searching all nearby Bluetooth devices...');
+    if (isIOS) {
+      this.log('info', 'iOS / Bluefy detected: opening BLE adapter chooser...');
       try {
+        // On Bluefy / iOS, acceptAllDevices with strictly string optionalServices reliably lists all OBD dongles
         this.device = await navigator.bluetooth.requestDevice({
           acceptAllDevices: true,
           optionalServices: ALL_OBD_SERVICES,
         });
-      } catch (fallbackErr: any) {
-        throw new Error(fallbackErr.message || 'No Bluetooth device selected');
+      } catch (iosErr: any) {
+        if (iosErr.name === 'NotFoundError' || iosErr.message?.includes('User cancelled')) {
+          throw new Error('Bluetooth device selection cancelled');
+        }
+        this.log('info', 'Retrying scan with OBD filters...');
+        try {
+          this.device = await navigator.bluetooth.requestDevice({
+            filters: stringFilters,
+            optionalServices: ALL_OBD_SERVICES,
+          });
+        } catch (filterErr: any) {
+          throw new Error(filterErr.message || 'No Bluetooth device selected');
+        }
+      }
+    } else {
+      this.log('info', 'Scanning for BLE OBD-II adapters (OBDLink CX, Veepeak, Vgate, Carista, Generic BLE)...');
+      try {
+        this.device = await navigator.bluetooth.requestDevice({
+          filters: stringFilters,
+          optionalServices: ALL_OBD_SERVICES,
+        });
+      } catch (err: any) {
+        if (err.name === 'NotFoundError' || err.message?.includes('User cancelled')) {
+          throw new Error('Bluetooth device selection cancelled');
+        }
+
+        this.log('info', 'Searching all nearby Bluetooth devices...');
+        try {
+          this.device = await navigator.bluetooth.requestDevice({
+            acceptAllDevices: true,
+            optionalServices: ALL_OBD_SERVICES,
+          });
+        } catch (fallbackErr: any) {
+          throw new Error(fallbackErr.message || 'No Bluetooth device selected');
+        }
       }
     }
 
@@ -161,6 +189,11 @@ export class BLEService implements OBDTransport {
 
     this.log('info', `Connecting to GATT Server on ${this.device.name || 'OBD-II Adapter'}...`);
     this.server = await this.device.gatt!.connect();
+
+    // Give iOS CoreBluetooth 350ms to settle peripheral connection before service discovery
+    if (isIOS) {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    }
 
     this.log('info', 'Discovering GATT primary OBD services & characteristics...');
     await this.discoverServicesAndCharacteristics();
@@ -237,6 +270,10 @@ export class BLEService implements OBDTransport {
     this.rxCharacteristic.addEventListener('characteristicvaluechanged', (event: any) => {
       this.handleRxData(event.target.value);
     });
+
+    if (isIOSDevice()) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
   }
 
   public flush(): void {
@@ -285,10 +322,15 @@ export class BLEService implements OBDTransport {
         try {
           for (let i = 0; i < data.length; i += CHUNK_SIZE) {
             const chunk = data.slice(i, i + CHUNK_SIZE);
-            if (typeof char?.writeValueWithoutResponse === 'function') {
+            const props = char?.properties;
+            if (props?.writeWithoutResponse && typeof char?.writeValueWithoutResponse === 'function') {
               await char.writeValueWithoutResponse(chunk);
+            } else if (props?.write && typeof char?.writeValueWithResponse === 'function') {
+              await char.writeValueWithResponse(chunk);
             } else if (typeof char?.writeValue === 'function') {
               await char.writeValue(chunk);
+            } else if (typeof char?.writeValueWithoutResponse === 'function') {
+              await char.writeValueWithoutResponse(chunk);
             } else if (typeof char?.writeValueWithResponse === 'function') {
               await char.writeValueWithResponse(chunk);
             } else {

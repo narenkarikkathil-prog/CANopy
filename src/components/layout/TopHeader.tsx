@@ -50,9 +50,9 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ activeTab }) => {
       case 'dashboard':
         return 'Live Telemetry';
       case 'commands':
-        return 'Commands & Data';
+        return 'Commands';
       case 'ble':
-        return 'BLE Connection';
+        return 'Connection';
       case 'help':
         return 'Help & Guide';
     }

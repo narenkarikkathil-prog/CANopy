@@ -88,10 +88,7 @@ export const CsvUploader: React.FC = () => {
         <div className="csv-uploader-header">
           <h3 className="section-title serif-heading">Import Vehicle Commands CSV</h3>
           <p className="section-subtitle">
-            Upload custom OBD-II parameter definitions. Required header columns:
-            <code className="csv-header-code">
-              VEHICLE_NAME, COMMAND_NAME, HEADER, MODE_PID, FORMULA, UNITS, MIN_VAL, MAX_VAL
-            </code>
+            Upload custom OBD-II parameter definitions in standard 8-column format
           </p>
         </div>
 
@@ -119,7 +116,7 @@ export const CsvUploader: React.FC = () => {
               {loading ? 'Validating CSV...' : 'Click to select or drag and drop a .csv file'}
             </p>
             <span className="drop-zone-hint">
-              Strict validation — reject whole file on any column error
+              Supports standard 8-column vehicle profile CSVs
             </span>
           </div>
         </div>

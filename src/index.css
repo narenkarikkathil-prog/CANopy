@@ -2423,6 +2423,135 @@ input::placeholder, textarea::placeholder {
   gap: 24px;
 }
 
+/* Platform Support Hero & Cards in Connection Help */
+.platform-support-hero {
+  background: linear-gradient(135deg, rgba(188, 154, 112, 0.08) 0%, rgba(250, 249, 246, 0.6) 100%);
+  border: 1px solid rgba(188, 154, 112, 0.25);
+  border-radius: 24px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.platform-hero-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.platform-hero-badge {
+  display: inline-flex;
+  align-self: flex-start;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background-color: var(--accent-soft);
+  color: var(--accent-hover);
+  border: 1px solid rgba(188, 154, 112, 0.3);
+}
+
+.platform-hero-title {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text);
+  margin-top: 2px;
+}
+
+.platform-hero-desc {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+  max-width: 680px;
+}
+
+.platform-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.platform-card {
+  background-color: var(--card);
+  border: 1px solid var(--track);
+  border-radius: 18px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: var(--shadow-subtle);
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+
+.platform-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(60, 40, 20, 0.08);
+  border-color: rgba(188, 154, 112, 0.4);
+}
+
+.platform-card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.platform-icon-box {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.platform-icon-box.ios-color {
+  background-color: rgba(42, 36, 32, 0.08);
+  color: var(--text);
+}
+
+.platform-icon-box.android-color {
+  background-color: rgba(76, 122, 90, 0.12);
+  color: var(--success);
+}
+
+.platform-icon-box.windows-color {
+  background-color: rgba(43, 89, 138, 0.12);
+  color: #2b598a;
+}
+
+.platform-card-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+
+.platform-badge-pill {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.platform-card-text {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.platform-devices-tag {
+  margin-top: auto;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+  padding-top: 8px;
+  border-top: 1px dashed var(--track);
+}
+
 .guide-step-block {
   display: flex;
   flex-direction: column;

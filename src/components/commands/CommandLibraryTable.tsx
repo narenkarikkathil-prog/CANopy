@@ -2,25 +2,15 @@ import React, { useState, useMemo } from 'react';
 import { useVehicle } from '../../context/VehicleContext';
 import { useWidgets } from '../../context/WidgetContext';
 import {
-  IconCar,
-  IconTrash,
   IconSearch,
   IconLayoutGridAdd,
   IconCheck,
+  IconTrash,
 } from '@tabler/icons-react';
 import type { WidgetType } from '../../types/telemetry';
 
 export const CommandLibraryTable: React.FC = () => {
-  const {
-    vehicles,
-    activeVehicleName,
-    setActiveVehicleName,
-    selectedYear,
-    setSelectedYear,
-    availableYears,
-    availableCommands,
-    deleteCommand,
-  } = useVehicle();
+  const { availableCommands, deleteCommand } = useVehicle();
 
   const { widgets, maxWidgets, addWidget } = useWidgets();
 
@@ -134,52 +124,6 @@ export const CommandLibraryTable: React.FC = () => {
             {filteredCommands.length} signal{filteredCommands.length === 1 ? '' : 's'}
           </span>
         </div>
-
-        {/* Vehicle & Year Selection */}
-        <div className="library-controls-group">
-          <div className="shared-vehicle-selector">
-            <label htmlFor="shared-library-vehicle" className="shared-vehicle-label">
-              <IconCar size={16} />
-              <span>Vehicle:</span>
-            </label>
-            <select
-              id="shared-library-vehicle"
-              className="vehicle-dropdown-clean"
-              value={activeVehicleName}
-              onChange={(e) => {
-                setActiveVehicleName(e.target.value);
-                setCurrentPage(1);
-              }}
-            >
-              {vehicles.map((v) => (
-                <option key={v.name} value={v.name}>
-                  {v.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {availableYears.length > 1 && (
-            <div className="shared-vehicle-selector">
-              <select
-                id="library-year-selector"
-                className="vehicle-dropdown-clean"
-                value={selectedYear}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setSelectedYear(val === 'all' ? 'all' : parseInt(val, 10));
-                  setCurrentPage(1);
-                }}
-              >
-                {availableYears.map((yr) => (
-                  <option key={yr.toString()} value={yr}>
-                    {yr === 'all' ? 'All Years' : yr}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-        </div>
       </div>
 
       {/* Slots full notification */}
@@ -196,7 +140,7 @@ export const CommandLibraryTable: React.FC = () => {
           <input
             type="text"
             className="library-search-input"
-            placeholder="Search signals by name, PID (e.g. 010C, 224899), category, or unit..."
+            placeholder="Search signals by name, PID, category, or unit..."
             value={searchQuery}
             onChange={(e) => {
               setSearchQuery(e.target.value);

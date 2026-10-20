@@ -22,9 +22,9 @@ interface NavItemConfig {
 
 const NAV_ITEMS: NavItemConfig[] = [
   { id: 'dashboard', label: 'Dashboard', icon: IconGauge },
-  { id: 'commands', label: 'Commands & Data', icon: IconDatabase },
-  { id: 'ble', label: 'BLE Connection', icon: IconBluetooth },
-  { id: 'help', label: 'Help & Guide', icon: IconHelp },
+  { id: 'commands', label: 'Commands', icon: IconDatabase },
+  { id: 'ble', label: 'Connection', icon: IconBluetooth },
+  { id: 'help', label: 'Help', icon: IconHelp },
 ];
 
 export const AppNav: React.FC<AppNavProps> = ({ activeTab, onSelectTab }) => {
