@@ -111,10 +111,10 @@ export const HelpView: React.FC = () => {
                       </div>
                     </div>
                     <p className="platform-card-text">
-                      Works with <strong>Bluetooth Low Energy (BLE)</strong> adapters using Web BLE browsers like <strong>Bluefy</strong> or <strong>WebBLE</strong> (free on the iOS App Store).
+                      Works with <strong>Bluetooth Low Energy (BLE)</strong> adapters using Web BLE browsers like <strong>Bluefy</strong> (free on the iOS App Store).
                     </p>
                     <div className="platform-devices-tag">
-                      <strong>Popular:</strong> OBDLink CX, OBDLink MX+ (BLE), Veepeak BLE+, Vgate iCar Pro BLE, Carista
+                      <strong>Popular:</strong> OBDLink CX, Vlinker MC+, Veepeak BLE+, Vgate iCar Pro BLE, Carista
                     </div>
                   </div>
 
