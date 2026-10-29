@@ -182,17 +182,16 @@ flowchart TD
 | **Apple iOS (iPhone & iPad)** | [Bluefy Web BLE Browser](https://apps.apple.com/app/bluefy-web-ble-browser/id1492822055) (Free on App Store) | **Bluetooth Low Energy (BLE)** |
 | **Android** | Google Chrome, Microsoft Edge, Opera | **BLE**, **Bluetooth Classic (BT / SPP)** |
 | **Windows 10 / 11** | Google Chrome, Microsoft Edge | **BLE**, **Bluetooth Classic (BT / SPP)**, **USB Serial** |
-| **macOS** | Google Chrome, Microsoft Edge | **BLE**, **Bluetooth Classic (BT / SPP)**, **USB Serial** |
 | **Linux** | Google Chrome, Chromium, Microsoft Edge | **BLE**, **Bluetooth Classic (BT / SPP)**, **USB Serial** |
 
 ### Recommended Hardware Adapters
 
 1. **Bluetooth Low Energy (BLE)**:
    - **OBDLink CX**: Best-in-class BLE adapter, low power, auto-sleep, fully compatible with iOS Bluefy and Android Chrome.
-   - **OBDLink MX+**: Dual-mode adapter (BLE mode for iOS; Bluetooth Classic mode for Android/PC).
    - **Veepeak OBDCheck BLE / BLE+**: Reliable, affordable, universally supported.
    - **Vgate iCar Pro BLE 4.0**: Compact and power-efficient.
    - **Carista OBD**: Fully compatible with standard ELM327 BLE profile.
+   - **VLinker MC+**: BLE adapter, low power, fully compatible
 2. **Bluetooth Classic (SPP)**:
    - **OBDLink MX+ / LX**: Ultra-high data rates, large internal memory buffer.
    - **vLinker FD+ / MC+**: STN-compatible processor, fast baud rates.
