@@ -1,4 +1,4 @@
-# Canopy 🚗⚡
+# Canopy 
 
 > **Modern, Web-Native OBD-II & CAN Bus Telemetry Dashboard**  
 > Connect wirelessly via Bluetooth Low Energy (BLE), Bluetooth Classic (SPP), or USB diagnostic cables directly in your browser. Powered by the open-source [OBDb Community Database](https://github.com/OBDb).
@@ -52,18 +52,18 @@ Whether you drive an electric vehicle (such as the Ford Mustang Mach-E), a hybri
 
 ```mermaid
 flowchart TD
-    subgraph Vehicle["🚗 Vehicle OBD-II Port"]
+    subgraph Vehicle["Vehicle OBD-II Port"]
         ECU["Vehicle ECUs (PCM, BECM, BCM)"]
         CAN["ISO 15765-4 CAN Bus (500 kbps)"]
         ECU <--> CAN
     end
 
-    subgraph Hardware["🔌 OBD-II Adapter Hardware"]
+    subgraph Hardware["OBD-II Adapter Hardware"]
         ADAPTER["ELM327 / STN11xx / OBDLink MX+"]
         CAN <--> ADAPTER
     end
 
-    subgraph Transport["📡 Web APIs (Zero-Install)"]
+    subgraph Transport["Web APIs (Zero-Install)"]
         BLE["Web Bluetooth API (GATT UART)"]
         SERIAL["Web Serial API (SPP / USB)"]
         MOCK["Mock BLE Service (Offline Demo)"]
@@ -71,7 +71,7 @@ flowchart TD
         ADAPTER <--> SERIAL
     end
 
-    subgraph Core["⚙️ CANopy Core Engine"]
+    subgraph Core["CANopy Core Engine"]
         INIT["Adapter Init & Protocol Lock-in"]
         THROTTLE["Dynamic Rate Throttle (1–30 Hz)"]
         PARSER["ELM327 & OBDb Hex Parser"]
@@ -89,7 +89,7 @@ flowchart TD
         INIT --> SAFETY
     end
 
-    subgraph UI["💻 Canopy Dashboard UI"]
+    subgraph UI["Canopy Dashboard UI"]
         DASH["5-Slot Responsive Widget Grid"]
         SPLIT["Unified Vehicle & Year Split Control"]
         IND["Top-Right Connection Indicator"]
