@@ -46,7 +46,7 @@ export const GaugeWidget: React.FC<GaugeWidgetProps> = ({ widget, command, value
       <div className="gauge-header">
         <div className="metric-label-with-accent">
           <span className="accent-indicator-dot" style={{ backgroundColor: accentHex }} />
-          <span className="widget-metric-label">{command?.commandName || 'Engine RPM'}</span>
+          <span className="widget-metric-label">{command?.commandName || 'Telemetry'}</span>
         </div>
       </div>
 

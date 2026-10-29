@@ -4,31 +4,33 @@ import { loadWidgets, saveWidgets } from '../services/storage';
 
 const MAX_WIDGETS = 5;
 
-const DEFAULT_INITIAL_WIDGETS: WidgetConfig[] = [
+export const DEFAULT_INITIAL_WIDGETS: WidgetConfig[] = [
   {
-    id: 'widget_rpm',
+    id: 'widget_soc',
     slotIndex: 0,
     type: 'gauge',
-    signalSourceId: 'std_rpm',
+    signalSourceId: 'MACHE_HVBAT_SOC',
     scaleMin: 0,
-    scaleMax: 8000,
+    scaleMax: 100,
     accentColor: 'neon-green',
   },
   {
     id: 'widget_speed',
     slotIndex: 1,
     type: 'lineGraph',
-    signalSourceId: 'std_speed',
+    signalSourceId: 'MACHE_VSS_HD',
     scalingMode: 'auto',
     xAxisWindow: 30,
     yAxisMin: 0,
     yAxisMax: 140,
+    accentColor: 'cyan',
   },
   {
-    id: 'widget_coolant',
+    id: 'widget_voltage',
     slotIndex: 2,
     type: 'numeric',
-    signalSourceId: 'std_coolant',
+    signalSourceId: 'MACHE_HVBAT_V',
+    accentColor: 'amber',
   },
 ];
 
@@ -51,7 +53,47 @@ export const WidgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     async function init() {
       const stored = await loadWidgets();
       if (stored && stored.length > 0) {
-        setWidgets(stored);
+        // Automatically migrate legacy gas widgets (std_rpm, std_coolant) to authentic EV metrics
+        const hasLegacyGasSignals = stored.some(
+          (w) =>
+            w.signalSourceId === 'std_rpm' ||
+            w.signalSourceId === 'std_coolant' ||
+            w.id === 'widget_rpm' ||
+            w.id === 'widget_coolant'
+        );
+        if (hasLegacyGasSignals) {
+          const migrated = stored.map((w) => {
+            if (w.signalSourceId === 'std_rpm' || w.id === 'widget_rpm') {
+              return {
+                ...w,
+                id: 'widget_soc',
+                signalSourceId: 'MACHE_HVBAT_SOC',
+                scaleMin: 0,
+                scaleMax: 100,
+                accentColor: w.accentColor || 'neon-green',
+              };
+            }
+            if (w.signalSourceId === 'std_coolant' || w.id === 'widget_coolant') {
+              return {
+                ...w,
+                id: 'widget_voltage',
+                signalSourceId: 'MACHE_HVBAT_V',
+                accentColor: w.accentColor || 'amber',
+              };
+            }
+            if (w.signalSourceId === 'std_speed') {
+              return {
+                ...w,
+                signalSourceId: 'MACHE_VSS_HD',
+              };
+            }
+            return w;
+          });
+          setWidgets(migrated);
+          await saveWidgets(migrated);
+        } else {
+          setWidgets(stored);
+        }
       } else {
         setWidgets(DEFAULT_INITIAL_WIDGETS);
         await saveWidgets(DEFAULT_INITIAL_WIDGETS);

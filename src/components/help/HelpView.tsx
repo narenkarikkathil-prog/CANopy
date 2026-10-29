@@ -22,10 +22,10 @@ export const HelpView: React.FC = () => {
   const handleDownloadTemplate = () => {
     const csvContent = [
       'VEHICLE_NAME,COMMAND_NAME,HEADER,MODE_PID,FORMULA,UNITS,MIN_VAL,MAX_VAL',
-      'Ford Mustang Mach-E,Engine RPM,7E0,010C,((A*256)+B)/4,RPM,0,8000',
-      'Ford Mustang Mach-E,Vehicle Speed,7E0,010D,A,km/h,0,240',
-      'Ford Mustang Mach-E,HV Battery State of Charge,6F5,224801,((A*256)+B)*0.1,%,0,100',
-      'Ford Mustang Mach-E,HV Battery Voltage,6F5,22480D,((A*256)+B)*0.1,V,200,500',
+      'Ford Mustang Mach-E,HV Battery State of Charge,7E4,224801,((A*256)+B)/500,%,0,100',
+      'Ford Mustang Mach-E,Vehicle Speed,7E0,221505,((A*256)+B)/128,km/h,0,200',
+      'Ford Mustang Mach-E,Primary Motor Speed,7E6,221E2C,(A*256)+B,RPM,-6000,12000',
+      'Ford Mustang Mach-E,HV Battery Voltage,7E4,22480D,((A*256)+B)/100,V,200,500',
       'Ford Fusion Hybrid,HV Battery Voltage,7E4,224802,((A*256)+B)*0.1,V,200,450',
       'Toyota Highlander,Vehicle Speed,7E0,010D,A,km/h,0,240',
       'Toyota Highlander,Coolant Temperature,7E0,0105,A-40,°C,-40,150',

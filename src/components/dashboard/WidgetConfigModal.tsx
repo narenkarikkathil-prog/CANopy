@@ -24,7 +24,10 @@ export const WidgetConfigModal: React.FC<WidgetConfigModalProps> = ({
   onClose,
   onSave,
 }) => {
-  const { availableCommands } = useVehicle();
+  const { availableCommands, activeVehicleName } = useVehicle();
+  const isEvVehicle =
+    activeVehicleName.toLowerCase().includes('mach-e') ||
+    availableCommands.some((c) => c.id.includes('MACHE') || c.id.includes('HVBAT'));
 
   const resolvedInitialCmd = findCommandForWidget(widget, availableCommands, slotIndex);
 
@@ -403,7 +406,9 @@ export const WidgetConfigModal: React.FC<WidgetConfigModalProps> = ({
                     No signals matched "<strong>{searchQuery}</strong>"
                   </p>
                   <p className="signal-empty-subtext">
-                    Try searching for terms like "RPM", "Speed", "Coolant", or PID "010C"
+                    {isEvVehicle
+                      ? 'Try searching for terms like "SOC", "Battery", "Voltage", "Speed", or "Motor"'
+                      : 'Try searching for terms like "RPM", "Speed", "Coolant", or PID "010C"'}
                   </p>
                   <button
                     type="button"

@@ -38,6 +38,15 @@ export function findCommandForWidget(
     if (suffixMatch) return suffixMatch;
   }
 
+  const isEv =
+    availableCommands.some(
+      (c) =>
+        c.id.includes('MACHE') ||
+        c.id.includes('HVBAT') ||
+        c.commandName.toLowerCase().includes('motor') ||
+        c.commandName.toLowerCase().includes('battery')
+    ) && !availableCommands.some((c) => c.modePid === '010C');
+
   // 3. Match by modePid
   if (rawSignalId) {
     const pidMatch = availableCommands.find(
@@ -47,12 +56,24 @@ export function findCommandForWidget(
   }
 
   // 4. Semantic / synonym aliases
+  if (rawSig.includes('soc') || rawSig.includes('state of charge') || (isEv && rawSig === 'rpm')) {
+    const socMatch = availableCommands.find(
+      (c) =>
+        c.id.includes('HVBAT_SOC') ||
+        c.commandName.toLowerCase().includes('charge') ||
+        c.commandName.toLowerCase().includes('soc')
+    );
+    if (socMatch) return socMatch;
+  }
+
   if (rawSig.includes('rpm') || rawSig.includes('motor')) {
     const rpmMatch = availableCommands.find(
       (c) =>
-        c.modePid === '010C' ||
+        (!isEv && c.modePid === '010C') ||
+        c.commandName.toLowerCase().includes('motor speed') ||
+        c.commandName.toLowerCase().includes('motor rpm') ||
         c.commandName.toLowerCase().includes('rpm') ||
-        c.id.toLowerCase().includes('rpm')
+        c.id.toLowerCase().includes('motor_rpm')
     );
     if (rpmMatch) return rpmMatch;
   }
@@ -61,6 +82,7 @@ export function findCommandForWidget(
     const speedMatch = availableCommands.find(
       (c) =>
         c.modePid === '010D' ||
+        c.id.includes('VSS') ||
         c.commandName.toLowerCase().includes('speed') ||
         c.id.toLowerCase().includes('vss')
     );
@@ -70,8 +92,11 @@ export function findCommandForWidget(
   if (rawSig.includes('coolant') || rawSig.includes('ect') || rawSig.includes('temp')) {
     const coolantMatch = availableCommands.find(
       (c) =>
-        c.modePid === '0105' ||
+        (!isEv && c.modePid === '0105') ||
+        c.id.includes('COOLANT') ||
         c.commandName.toLowerCase().includes('coolant') ||
+        c.commandName.toLowerCase().includes('temperature') ||
+        c.id.toLowerCase().includes('temp') ||
         c.id.toLowerCase().includes('ect')
     );
     if (coolantMatch) return coolantMatch;
@@ -80,30 +105,78 @@ export function findCommandForWidget(
   if (rawSig.includes('volt') || rawSig.includes('bat')) {
     const voltMatch = availableCommands.find(
       (c) =>
+        c.id.includes('HVBAT_V') ||
         c.modePid === '0142' ||
+        c.commandName.toLowerCase().includes('voltage') ||
         c.commandName.toLowerCase().includes('volt') ||
         c.id.toLowerCase().includes('bat')
     );
     if (voltMatch) return voltMatch;
   }
 
-  // 5. Slot index fallback
+  if (rawSig.includes('throttle') || rawSig.includes('pedal') || rawSig.includes('accel')) {
+    const pedalMatch = availableCommands.find(
+      (c) =>
+        c.id.includes('ACC_POS') ||
+        c.id.includes('ACCEL') ||
+        c.commandName.toLowerCase().includes('accelerator') ||
+        c.commandName.toLowerCase().includes('pedal') ||
+        (!isEv && (c.modePid === '0111' || c.commandName.toLowerCase().includes('throttle')))
+    );
+    if (pedalMatch) return pedalMatch;
+  }
+
+  if (rawSig.includes('brake') || rawSig.includes('brk')) {
+    const brakeMatch = availableCommands.find(
+      (c) =>
+        c.id.includes('BRK') ||
+        c.commandName.toLowerCase().includes('brake') ||
+        c.id.includes('PARKING_BRAKE')
+    );
+    if (brakeMatch) return brakeMatch;
+  }
+
+  // 5. Slot index fallback (EV-aware vs ICE-aware)
   const idx = slotIdx !== undefined ? slotIdx : widget.slotIndex;
   if (idx === 0) {
-    const slot0 = availableCommands.find(
-      (c) => c.modePid === '010C' || c.commandName.toLowerCase().includes('rpm')
-    );
-    if (slot0) return slot0;
+    if (isEv) {
+      const evSlot0 = availableCommands.find(
+        (c) =>
+          c.id.includes('HVBAT_SOC') ||
+          c.commandName.toLowerCase().includes('state of charge') ||
+          c.commandName.toLowerCase().includes('charge') ||
+          c.id.includes('MOTOR_RPM')
+      );
+      if (evSlot0) return evSlot0;
+    } else {
+      const slot0 = availableCommands.find(
+        (c) => c.modePid === '010C' || c.commandName.toLowerCase().includes('rpm')
+      );
+      if (slot0) return slot0;
+    }
   } else if (idx === 1) {
     const slot1 = availableCommands.find(
-      (c) => c.modePid === '010D' || c.commandName.toLowerCase().includes('speed')
+      (c) =>
+        c.id.includes('VSS') ||
+        c.modePid === '010D' ||
+        c.commandName.toLowerCase().includes('speed')
     );
     if (slot1) return slot1;
   } else if (idx === 2) {
-    const slot2 = availableCommands.find(
-      (c) => c.modePid === '0105' || c.commandName.toLowerCase().includes('coolant')
-    );
-    if (slot2) return slot2;
+    if (isEv) {
+      const evSlot2 = availableCommands.find(
+        (c) =>
+          c.id.includes('HVBAT_V') ||
+          c.commandName.toLowerCase().includes('battery voltage') ||
+          c.id.includes('HVBAT_T')
+      );
+      if (evSlot2) return evSlot2;
+    } else {
+      const slot2 = availableCommands.find(
+        (c) => c.modePid === '0105' || c.commandName.toLowerCase().includes('coolant')
+      );
+      if (slot2) return slot2;
+    }
   }
 
   return undefined;

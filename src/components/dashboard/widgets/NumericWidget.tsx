@@ -28,7 +28,7 @@ export const NumericWidget: React.FC<NumericWidgetProps> = ({ widget, command, v
       <div className="numeric-header">
         <div className="metric-label-with-accent">
           <span className="accent-indicator-dot" style={{ backgroundColor: accentHex }} />
-          <span className="widget-metric-label">{command?.commandName || 'Coolant Temp'}</span>
+          <span className="widget-metric-label">{command?.commandName || 'Telemetry'}</span>
         </div>
       </div>
 

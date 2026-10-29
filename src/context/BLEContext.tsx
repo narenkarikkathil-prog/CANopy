@@ -646,10 +646,19 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     let commandsToPoll = availableCommands.filter((c) => activeCommandIds.has(c.id));
 
-    // If no widgets matched or commands are empty, fall back to standard core PIDs
+    // If no widgets matched or commands are empty, fall back to core PIDs for the vehicle type
     // so adapter polling is active, LEDs blink, and live data requests flow!
     if (commandsToPoll.length === 0) {
-      const starterPids = ['010C', '010D', '0105'];
+      const isEvVehicle = availableCommands.some(
+        (c) =>
+          c.id.includes('MACHE') ||
+          c.id.includes('HVBAT') ||
+          c.commandName.toLowerCase().includes('charge') ||
+          c.commandName.toLowerCase().includes('motor')
+      );
+      const starterPids = isEvVehicle
+        ? ['224801', '221505', '22480D', '221E2C']
+        : ['010C', '010D', '0105'];
       const starterCmds = availableCommands.filter((c) => starterPids.includes(c.modePid));
       commandsToPoll = starterCmds.length > 0 ? starterCmds : availableCommands.slice(0, 3);
     }

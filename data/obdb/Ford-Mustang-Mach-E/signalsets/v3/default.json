@@ -56,6 +56,14 @@
   "signals": [
     {"id": "MACHE_DCDC_ENABLED", "path": "Battery", "fmt": { "len": 8, "max": 1, "unit": "offon" }, "name": "DC-DC converter"}
   ]},
+{ "hdr": "760", "rax": "768", "cmd": {"22": "2B00"}, "freq": 3, "dbgfilter": { "from": 2026 },
+  "signals": [
+    {"id": "MACHE_PARKING_BRAKE", "path": "Brakes", "fmt": { "len": 1, "max": 1, "unit": "offon" }, "name": "Parking brake state"}
+  ]},
+{ "hdr": "760", "rax": "768", "cmd": {"22": "2B0D"}, "freq": 1, "dbgfilter": { "from": 2026 },
+  "signals": [
+    {"id": "MACHE_BRK_FL_P", "path": "Brakes", "fmt": { "len": 8, "max": 255, "unit": "kilopascal" }, "name": "Brake hydraulic fluid pressure", "suggestedMetric": "brakePressure"}
+  ]},
 { "hdr": "760", "rax": "768", "cmd": {"22": "DD01"}, "freq": 5, "dbgfilter": { "from": 2026 },
   "signals": [
     {"id": "MACHE_ODO_BCM", "path": "Trips", "fmt": { "len": 24, "max": 16777215, "unit": "kilometers" }, "name": "Odometer, battery control module", "suggestedMetric": "odometer"}
@@ -64,9 +72,13 @@
   "signals": [
     {"id": "MACHE_AC_COMP_A", "path": "Climate", "fmt": { "len": 16, "max": 100, "min": -100, "mul": 100, "div": 32767, "sign": true, "unit": "amps" }, "name": "A/C compressor current"}
   ]},
+{ "hdr": "7E0", "rax": "7E8", "cmd": {"22": "032B"}, "freq": 1, "dbgfilter": { "from": 2026 },
+  "signals": [
+    {"id": "MACHE_ACC_POS", "path": "Movement", "fmt": { "len": 8, "max": 100, "div": 2, "unit": "percent" }, "name": "Accelerator pedal position", "suggestedMetric": "acceleratorPedalPosition"}
+  ]},
 { "hdr": "7E0", "rax": "7E8", "cmd": {"22": "0580"}, "freq": 1, "dbgfilter": { "from": 2026 },
   "signals": [
-    {"id": "MACHE_GRILL_SHUTTER_POSITION", "path": "Engine", "fmt": { "len": 8, "max": 100, "mul": 100, "div": 255, "unit": "percent" }, "name": "Grill shutter position"}
+    {"id": "MACHE_GRILL_SHUTTER_POSITION", "path": "Cooling", "fmt": { "len": 8, "max": 100, "mul": 100, "div": 255, "unit": "percent" }, "name": "Grill shutter position"}
   ]},
 { "hdr": "7E0", "rax": "7E8", "cmd": {"22": "1505"}, "freq": 0.1, "dbgfilter": { "from": 2026 },
   "signals": [
@@ -74,11 +86,11 @@
   ]},
 { "hdr": "7E0", "rax": "7E8", "cmd": {"22": "DD01"}, "freq": 5, "dbgfilter": { "from": 2026 },
   "signals": [
-    {"id": "MACHE_ODO_ECM", "path": "Trips", "fmt": { "len": 24, "max": 16777215, "unit": "kilometers" }, "name": "Odometer, engine control module", "suggestedMetric": "odometer"}
+    {"id": "MACHE_ODO_ECM", "path": "Trips", "fmt": { "len": 24, "max": 16777215, "unit": "kilometers" }, "name": "Odometer, powertrain control module", "suggestedMetric": "odometer"}
   ]},
 { "hdr": "7E0", "rax": "7E8", "cmd": {"22": "F41F"}, "freq": 1, "dbgfilter": { "from": 2026 },
   "signals": [
-    {"id": "MACHE_RUN_TIME", "path": "Engine", "fmt": { "len": 16, "max": 65535, "unit": "seconds" }, "name": "Engine run time"}
+    {"id": "MACHE_RUN_TIME", "path": "Powertrain", "fmt": { "len": 16, "max": 65535, "unit": "seconds" }, "name": "Powertrain run time"}
   ]},
 { "hdr": "7E2", "rax": "7EA", "cmd": {"22": "484A"}, "freq": 1, "dbgfilter": { "from": 2025 },
   "signals": [

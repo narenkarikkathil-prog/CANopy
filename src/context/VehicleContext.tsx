@@ -4,6 +4,7 @@ import {
   INITIAL_VEHICLE_PROFILES,
   VEHICLE_DEFINITIONS,
   buildVehicleCommands,
+  isGasOrIceSignal,
 } from '../data/defaultVehicles';
 import {
   loadVehicles,
@@ -55,6 +56,27 @@ export const VehicleProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (!currentVehicles || currentVehicles.length === 0 || !hasOBDbProfiles) {
         currentVehicles = INITIAL_VEHICLE_PROFILES;
         await saveVehicles(currentVehicles);
+      } else {
+        // Ensure Mach-E profile only retains clean EV commands without legacy gas/ICE PIDs
+        let updated = false;
+        currentVehicles = currentVehicles.map((v) => {
+          if (v.name === 'Ford Mustang Mach-E') {
+            const hasIce = v.commands.some((c) => isGasOrIceSignal(c));
+            if (hasIce || v.commands.length > 90) {
+              updated = true;
+              const cleanBase = buildVehicleCommands(v.name, 'all');
+              const customCmds = (v.commands || []).filter((c) => c.isCustom && !isGasOrIceSignal(c));
+              return {
+                ...v,
+                commands: [...cleanBase, ...customCmds],
+              };
+            }
+          }
+          return v;
+        });
+        if (updated) {
+          await saveVehicles(currentVehicles);
+        }
       }
       setVehicles(currentVehicles);
 

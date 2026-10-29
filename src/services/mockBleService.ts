@@ -156,18 +156,27 @@ export class MockBLEService {
     // Metric-specific realistic behavior
     const nameLower = (matchedCmd?.commandName || '').toLowerCase();
     const pidLower = cleanCmd.toLowerCase();
+    const cmdIdLower = (matchedCmd?.id || '').toLowerCase();
+    const isElectricMotor = nameLower.includes('motor') || cmdIdLower.includes('motor');
     let simValue = 0;
 
-    if (nameLower.includes('rpm') || pidLower === '010c') {
-      // RPM: realistic idling + throttle oscillation between 850 and 3400 RPM
+    if (isElectricMotor && (nameLower.includes('rpm') || nameLower.includes('speed') || cmdIdLower.includes('rpm'))) {
+      // Electric motor RPM: stationary at 0 RPM, tracking vehicle speed up to ~9500 RPM
+      const speedFactor = Math.max(0, 0.45 + 0.45 * Math.sin(this.tickCount * 0.08));
+      simValue = Math.round(speedFactor * 7800 + 150 * Math.sin(this.tickCount * 0.2));
+    } else if (nameLower.includes('rpm') || pidLower === '010c') {
+      // ICE Gas RPM: realistic idling + throttle oscillation between 850 and 3400 RPM
       simValue = 850 + 2500 * Math.sin(this.tickCount * 0.12) ** 2;
-    } else if (nameLower.includes('speed') || pidLower === '010d') {
+    } else if (nameLower.includes('speed') || pidLower === '010d' || cmdIdLower.includes('vss')) {
       // Speed: smooth driving cycle between 0 and 92 km/h
       simValue = Math.max(0, 48 + 42 * Math.sin(this.tickCount * 0.08));
+    } else if (nameLower.includes('battery') && nameLower.includes('coolant')) {
+      // EV battery liquid coolant: gentle thermal management 22°C - 27°C
+      simValue = 24 + Math.sin(this.tickCount * 0.04) * 2.5;
     } else if (nameLower.includes('coolant') || pidLower === '0105') {
-      // Coolant: warm operating temp around 89°C - 93°C
+      // ICE Gas Coolant: warm operating temp around 89°C - 93°C
       simValue = 90 + Math.sin(this.tickCount * 0.04) * 2.5;
-    } else if (nameLower.includes('soc') || nameLower.includes('state of charge')) {
+    } else if (nameLower.includes('soc') || nameLower.includes('state of charge') || cmdIdLower.includes('soc')) {
       // HV battery state of charge: 74% - 78%
       simValue = 76.5 + Math.sin(this.tickCount * 0.03) * 1.5;
     } else if (nameLower.includes('voltage') || nameLower.includes('volt')) {
@@ -182,6 +191,17 @@ export class MockBLEService {
     } else if (nameLower.includes('current') || nameLower.includes('amp')) {
       // High voltage battery current: -20A regen to +60A discharge
       simValue = -10 + 45 * Math.sin(this.tickCount * 0.1);
+    } else if (nameLower.includes('accelerator') || nameLower.includes('pedal') || pidLower === '0111') {
+      // Accelerator pedal / throttle position: 0% to 75%
+      const pedal = Math.max(0, 25 + 35 * Math.sin(this.tickCount * 0.12));
+      simValue = Math.round(pedal);
+    } else if (nameLower.includes('brake') && (nameLower.includes('pressure') || cmdIdLower.includes('brk_fl_p'))) {
+      // Brake hydraulic pressure: 0 to 120 kPa (peaks during braking)
+      const brk = Math.max(0, 45 * Math.sin(this.tickCount * 0.08 + Math.PI));
+      simValue = Math.round(brk);
+    } else if (nameLower.includes('parking brake')) {
+      // Parking brake: 0 (released) while vehicle is operating
+      simValue = 0;
     } else {
       // General plausible oscillation between min and max
       const span = max - min;
