@@ -11,6 +11,13 @@ import {
   IconCpu,
   IconCheck,
   IconTrash,
+  IconGauge,
+  IconAlertTriangle,
+  IconInfoCircle,
+  IconBolt,
+  IconRotateClockwise,
+  IconMinus,
+  IconPlus,
 } from '@tabler/icons-react';
 
 interface BLEConnectionViewProps {
@@ -32,6 +39,14 @@ export const BLEConnectionView: React.FC<BLEConnectionViewProps> = () => {
     setIsSimulated,
     isBLESupported,
     isSerialSupported,
+    pollingRateHz,
+    setPollingRateHz,
+    actualRateHz,
+    rateRationale,
+    isCustomRate,
+    benchmarkAdapterSpeed,
+    resetToScientificDefault,
+    lastBenchmark,
   } = useBLE();
 
   const [selectedMode, setSelectedModeState] = useState<ConnectionMode>(() => {
@@ -42,6 +57,25 @@ export const BLEConnectionView: React.FC<BLEConnectionViewProps> = () => {
     const isMobile = typeof navigator !== 'undefined' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
     return isMobile ? 'ble' : 'classic';
   });
+
+  const [isBenchmarking, setIsBenchmarking] = useState<boolean>(false);
+  const [benchmarkNotice, setBenchmarkNotice] = useState<string | null>(null);
+
+  const handleBenchmark = async () => {
+    setIsBenchmarking(true);
+    setBenchmarkNotice(null);
+    try {
+      const res = await benchmarkAdapterSpeed();
+      if (res) {
+        setBenchmarkNotice(
+          `Benchmark: ${res.latencyMs}ms avg latency. Hardware max: ${res.maxRateHz} req/s. Safe recommended: ${res.recommendedRateHz} req/s.`
+        );
+        setTimeout(() => setBenchmarkNotice(null), 8000);
+      }
+    } finally {
+      setIsBenchmarking(false);
+    }
+  };
 
   const setSelectedMode = (mode: ConnectionMode) => {
     setSelectedModeState(mode);
@@ -298,6 +332,188 @@ export const BLEConnectionView: React.FC<BLEConnectionViewProps> = () => {
               <span>Simulate Adapter (Offline Demo)</span>
             </span>
           </label>
+        </div>
+      </div>
+
+      {/* Data Collection Rate Configuration Card */}
+      <div className="card data-rate-card" role="region" aria-label="OBD-II Data Collection Rate">
+        <div className="data-rate-header">
+          <div className="data-rate-title-group">
+            <div className="data-rate-icon-box">
+              <IconGauge size={22} />
+            </div>
+            <div>
+              <h2 className="section-title serif-heading">Data Collection Rate</h2>
+              <p className="section-subtitle">
+                How many times per second the OBD reader is queried for sensor data
+              </p>
+            </div>
+          </div>
+
+          <div className="data-rate-badges-group">
+            <span className="data-rate-target-badge" title="Target querying frequency">
+              <strong>{pollingRateHz}</strong> req/s
+              <span className="data-rate-ms-sub"> (~{Math.round(1000 / pollingRateHz)} ms)</span>
+            </span>
+
+            {status === 'connected' && (
+              <span
+                className={`data-rate-live-pill ${actualRateHz > 0 ? 'active' : ''}`}
+                title="Actual measured request throughput in real-time"
+              >
+                <span className="live-rate-dot" />
+                <span>Live: <strong>{actualRateHz}</strong> req/s</span>
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Rate Presets Segmented Buttons */}
+        <div className="data-rate-presets-section">
+          <span className="data-rate-label">Frequency Presets:</span>
+          <div className="data-rate-presets-pills">
+            {[
+              { hz: 2, label: '2 Hz', note: 'Eco / Battery' },
+              { hz: 5, label: '5 Hz', note: 'Conservative' },
+              { hz: 10, label: '10 Hz', note: 'Default' },
+              { hz: 15, label: '15 Hz', note: 'Fast' },
+              { hz: 20, label: '20 Hz', note: 'STN / Ultra' },
+            ].map((preset) => {
+              const isSelected = pollingRateHz === preset.hz;
+              return (
+                <button
+                  key={preset.hz}
+                  type="button"
+                  className={`rate-preset-btn ${isSelected ? 'active' : ''}`}
+                  onClick={() => setPollingRateHz(preset.hz, true)}
+                >
+                  <span className="preset-hz">{preset.label}</span>
+                  <span className="preset-note">{preset.note}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Interactive Slider & Stepper */}
+        <div className="data-rate-slider-row">
+          <button
+            type="button"
+            className="rate-step-btn"
+            onClick={() => setPollingRateHz(Math.max(1, pollingRateHz - 1), true)}
+            aria-label="Decrease rate by 1 req/s"
+            disabled={pollingRateHz <= 1}
+          >
+            <IconMinus size={15} />
+          </button>
+
+          <div className="rate-slider-wrapper">
+            <input
+              type="range"
+              id="polling-rate-slider"
+              className="canopy-range-slider"
+              min={1}
+              max={30}
+              step={1}
+              value={pollingRateHz}
+              onChange={(e) => setPollingRateHz(parseInt(e.target.value, 10), true)}
+              aria-label="Data collection rate slider"
+            />
+            <div className="slider-ticks">
+              <span>1 Hz</span>
+              <span>10 Hz (Default)</span>
+              <span>20 Hz</span>
+              <span>30 Hz</span>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            className="rate-step-btn"
+            onClick={() => setPollingRateHz(Math.min(30, pollingRateHz + 1), true)}
+            aria-label="Increase rate by 1 req/s"
+            disabled={pollingRateHz >= 30}
+          >
+            <IconPlus size={15} />
+          </button>
+        </div>
+
+        {/* Warning Callouts */}
+        {pollingRateHz > 12 && (
+          <div className="rate-alert-banner warning" role="alert">
+            <IconAlertTriangle size={18} className="rate-alert-icon" />
+            <div className="rate-alert-text">
+              <strong>High Polling Rate Warning:</strong> Querying faster than 12–15 times per second can saturate internal buffer memory on standard ELM327 adapters or cause CAN bus arbitration timeouts on certain vehicles. If sensor readings freeze or disconnect, reduce to 5–10 req/s.
+            </div>
+          </div>
+        )}
+
+        {pollingRateHz <= 2 && (
+          <div className="rate-alert-banner info" role="status">
+            <IconInfoCircle size={18} className="rate-alert-icon" />
+            <div className="rate-alert-text">
+              <strong>Low Polling Rate:</strong> Data is queried every 500 ms or slower. Recommended for reducing phone battery and vehicle bus load during long highway trips.
+            </div>
+          </div>
+        )}
+
+        {/* Scientific Hardware Profile & Benchmark Controls */}
+        <div className="rate-scientific-card">
+          <div className="rate-scientific-header">
+            <div className="rate-scientific-title">
+              <IconCpu size={16} />
+              <span>Scientific Hardware Profile</span>
+            </div>
+            {isCustomRate && (
+              <button
+                type="button"
+                className="btn-ghost rate-reset-btn"
+                onClick={resetToScientificDefault}
+                title="Reset to scientifically calculated default for this hardware"
+              >
+                <IconRotateClockwise size={13} />
+                <span>Reset to Default</span>
+              </button>
+            )}
+          </div>
+
+          <p className="rate-scientific-rationale">{rateRationale}</p>
+
+          <div className="rate-benchmark-actions">
+            <button
+              type="button"
+              className="btn-secondary rate-benchmark-btn"
+              onClick={handleBenchmark}
+              disabled={status !== 'connected' || isBenchmarking}
+              title={status !== 'connected' ? 'Connect an adapter to benchmark exchange rate' : 'Send 3 probe commands to measure hardware latency'}
+            >
+              <IconBolt size={15} />
+              <span>{isBenchmarking ? 'Testing Exchange Rate...' : 'Benchmark Adapter Speed'}</span>
+            </button>
+
+            {status !== 'connected' && (
+              <span className="benchmark-offline-hint">
+                Connect adapter to run live speed benchmark
+              </span>
+            )}
+          </div>
+
+          {benchmarkNotice && (
+            <div className="rate-benchmark-pill" role="status">
+              <IconCheck size={14} />
+              <span>{benchmarkNotice}</span>
+            </div>
+          )}
+
+          {lastBenchmark && (
+            <div className="rate-last-benchmark-stats">
+              <span>Avg Latency: <strong>{lastBenchmark.latencyMs} ms</strong></span>
+              <span className="stat-sep">•</span>
+              <span>Hardware Max: <strong>{lastBenchmark.maxRateHz} req/s</strong></span>
+              <span className="stat-sep">•</span>
+              <span>Safe Recommended: <strong>{lastBenchmark.recommendedRateHz} req/s</strong></span>
+            </div>
+          )}
         </div>
       </div>
 

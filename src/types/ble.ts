@@ -20,3 +20,11 @@ export interface BLEDeviceInfo {
   type?: ConnectionType;
 }
 
+export interface DataRateBenchmark {
+  latencyMs: number;
+  maxRateHz: number;
+  recommendedRateHz: number;
+  testedAt: number;
+}
+
+

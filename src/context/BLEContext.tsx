@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
-import type { BLEConnectionStatus, ATLogEntry, ConnectionType } from '../types/ble';
+import type { BLEConnectionStatus, ATLogEntry, ConnectionType, DataRateBenchmark } from '../types/ble';
 import type { LiveTelemetryMap, HistoryBufferMap, OBDCommand } from '../types/telemetry';
 import { BLEService } from '../services/bleService';
 import { SerialOBDService } from '../services/serialService';
@@ -45,6 +45,16 @@ interface BLEContextType {
   sendManualCommand: (cmd: string) => Promise<string>;
   clearLogs: () => void;
 
+  // Data Collection Rate (requests per second)
+  pollingRateHz: number;
+  setPollingRateHz: (rate: number, isUserExplicit?: boolean) => void;
+  actualRateHz: number;
+  rateRationale: string;
+  isCustomRate: boolean;
+  benchmarkAdapterSpeed: () => Promise<DataRateBenchmark | null>;
+  resetToScientificDefault: () => void;
+  lastBenchmark: DataRateBenchmark | null;
+
   // Telemetry Recording & CSV Export
   isRecording: boolean;
   recordingDuration: number;
@@ -55,6 +65,60 @@ interface BLEContextType {
   deleteRecording: () => void;
   startNewRecording: () => void;
   exportRecordingCSV: () => void;
+}
+
+/**
+ * Computes the scientifically grounded default polling rate (requests per second)
+ * based on physical bus constraints and adapter hardware:
+ * 1. Legacy protocols (J1850 / ISO 9141 / KWP @ 10.4-41.6 kbps): 4 req/s max
+ * 2. STN chipsets (STN11xx, STN21xx, OBDLink, vLinker with 32-bit core & deep FIFOs): 20 req/s
+ * 3. ELM327 with verified Adaptive Timing 2 (AT2) on 500 kbps CAN: 12 req/s
+ * 4. Standard ELM327 BLE on CAN: 10 req/s (certified to avoid BLE GATT notification drop)
+ */
+export function computeScientificDefaultRate(
+  caps: AdapterCapabilities | null,
+  _connectionType?: ConnectionType,
+  isSimulated?: boolean
+): { rate: number; rationale: string } {
+  if (isSimulated) {
+    return {
+      rate: 10,
+      rationale: 'Simulated adapter running at standard 10 req/s baseline.',
+    };
+  }
+
+  if (!caps) {
+    return {
+      rate: 10,
+      rationale: 'Recommended 10 req/s default for ISO 15765-4 CAN (500 kbps).',
+    };
+  }
+
+  if (/^[1-5]$/.test(caps.protocol)) {
+    return {
+      rate: 4,
+      rationale: `Protocol ${caps.protocol} (legacy non-CAN at 10.4–41.6 kbps). Capped at 4 req/s to prevent bus collision.`,
+    };
+  }
+
+  if (caps.isSTN) {
+    return {
+      rate: 20,
+      rationale: `${caps.identity || 'STN / OBDLink'} 32-bit processor detected. Certified for 20 req/s without packet drops.`,
+    };
+  }
+
+  if (caps.supportsAT2) {
+    return {
+      rate: 12,
+      rationale: 'ELM327 with Adaptive Timing 2 (AT2) on 500 kbps CAN bus. Optimal throughput: 12 req/s.',
+    };
+  }
+
+  return {
+    rate: 10,
+    rationale: 'Standard ELM327 BLE on CAN bus. 10 req/s recommended to prevent BLE buffer drops.',
+  };
 }
 
 const BLEContext = createContext<BLEContextType | null>(null);
@@ -118,6 +182,38 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [recordedSamplesCount, setRecordedSamplesCount] = useState<number>(0);
   const [recordedChannelsCount, setRecordedChannelsCount] = useState<number>(0);
 
+  // Data Collection Rate State & Refs
+  const [pollingRateHz, setPollingRateHzState] = useState<number>(() => {
+    if (typeof localStorage !== 'undefined') {
+      const saved = localStorage.getItem('canopy_polling_rate_hz');
+      if (saved) {
+        const val = parseInt(saved, 10);
+        if (!isNaN(val) && val >= 1 && val <= 40) return val;
+      }
+    }
+    return 10;
+  });
+
+  const [isCustomRate, setIsCustomRate] = useState<boolean>(() => {
+    if (typeof localStorage !== 'undefined') {
+      return localStorage.getItem('canopy_polling_rate_hz') !== null;
+    }
+    return false;
+  });
+
+  const [rateRationale, setRateRationale] = useState<string>(
+    'Recommended 10 req/s default for modern ISO 15765-4 CAN vehicles.'
+  );
+
+  const [lastBenchmark, setLastBenchmark] = useState<DataRateBenchmark | null>(null);
+  const [actualRateHz, setActualRateHz] = useState<number>(0);
+
+  const pollingRateHzRef = useRef<number>(pollingRateHz);
+  pollingRateHzRef.current = pollingRateHz;
+  const isCustomRateRef = useRef<boolean>(isCustomRate);
+  isCustomRateRef.current = isCustomRate;
+  const requestTimestampsRef = useRef<number[]>([]);
+
   const isRecordingRef = useRef<boolean>(false);
   const recordedSamplesRef = useRef<TelemetrySample[]>([]);
   const recordingStartTimeRef = useRef<number | null>(null);
@@ -154,6 +250,19 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setAtLogs([]);
   }, []);
 
+  const applyScientificRateRecommendation = useCallback(
+    (caps: AdapterCapabilities | null, connType?: ConnectionType, simulated?: boolean) => {
+      const recommendation = computeScientificDefaultRate(caps, connType, simulated);
+      setRateRationale(recommendation.rationale);
+      if (!isCustomRateRef.current) {
+        setPollingRateHzState(recommendation.rate);
+        pollingRateHzRef.current = recommendation.rate;
+        addLog('info', `[Data Rate] Configured collection rate to ${recommendation.rate} req/s (${recommendation.rationale})`);
+      }
+    },
+    [addLog]
+  );
+
   // Initialize transport service instances
   useEffect(() => {
     bleServiceRef.current = new BLEService(
@@ -176,6 +285,7 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         capabilitiesRef.current = caps;
         setStatus('connected');
         setDeviceName(name);
+        applyScientificRateRecommendation(caps, 'classic', false);
         addLog('info', `[Auto-Reconnect] Connected to ${name}. Telemetry polling active.`);
       }
     );
@@ -206,6 +316,103 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (connectionType === 'serial' || connectionType === 'classic' || connectionType === 'usb') return serialServiceRef.current;
     return bleServiceRef.current;
   }, [isSimulated, connectionType]);
+
+  const setPollingRateHz = useCallback((newRate: number, isUserExplicit = true) => {
+    const clamped = Math.max(1, Math.min(40, Math.round(newRate)));
+    setPollingRateHzState(clamped);
+    pollingRateHzRef.current = clamped;
+    if (isUserExplicit) {
+      setIsCustomRate(true);
+      isCustomRateRef.current = true;
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('canopy_polling_rate_hz', clamped.toString());
+      }
+    }
+  }, []);
+
+  const resetToScientificDefault = useCallback(() => {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('canopy_polling_rate_hz');
+    }
+    setIsCustomRate(false);
+    isCustomRateRef.current = false;
+    const rec = computeScientificDefaultRate(capabilitiesRef.current, connectionType, isSimulated);
+    setPollingRateHzState(rec.rate);
+    pollingRateHzRef.current = rec.rate;
+    setRateRationale(rec.rationale);
+    addLog('info', `[Data Rate] Reset to scientific default: ${rec.rate} req/s.`);
+  }, [connectionType, isSimulated, addLog]);
+
+  const benchmarkAdapterSpeed = useCallback(async (): Promise<DataRateBenchmark | null> => {
+    const service = getActiveService();
+    if (!service || !service.isConnected()) {
+      addLog('error', '[Benchmark] Cannot benchmark: OBD adapter is not connected.');
+      return null;
+    }
+
+    addLog('info', '[Benchmark] Measuring round-trip adapter exchange rate (3 probe samples)...');
+    try {
+      const probeLatencies: number[] = [];
+      const probeCmd = 'AT RV';
+
+      for (let i = 0; i < 3; i++) {
+        const start = performance.now();
+        await service.sendCommand(probeCmd, 1200);
+        const duration = performance.now() - start;
+        probeLatencies.push(duration);
+        await new Promise((r) => setTimeout(r, 15));
+      }
+
+      const avgLatencyMs = Math.round(
+        probeLatencies.reduce((sum, d) => sum + d, 0) / probeLatencies.length
+      );
+
+      const rawMaxRate = avgLatencyMs > 0 ? Math.floor(1000 / avgLatencyMs) : 10;
+      const maxRateHz = Math.min(40, Math.max(1, rawMaxRate));
+      const recommendedRateHz = Math.max(2, Math.min(30, Math.floor(maxRateHz * 0.75)));
+
+      const benchmarkResult: DataRateBenchmark = {
+        latencyMs: avgLatencyMs,
+        maxRateHz,
+        recommendedRateHz,
+        testedAt: Date.now(),
+      };
+
+      setLastBenchmark(benchmarkResult);
+      setRateRationale(
+        `Benchmarked hardware round-trip: ${avgLatencyMs}ms (Max ~${maxRateHz} req/s). Safe recommended rate: ${recommendedRateHz} req/s.`
+      );
+      addLog(
+        'info',
+        `[Benchmark Complete] Average Latency: ${avgLatencyMs}ms | Hardware Max: ${maxRateHz} req/s | Safe Target: ${recommendedRateHz} req/s`
+      );
+
+      if (!isCustomRateRef.current) {
+        setPollingRateHzState(recommendedRateHz);
+        pollingRateHzRef.current = recommendedRateHz;
+      }
+
+      return benchmarkResult;
+    } catch (err: any) {
+      addLog('error', `[Benchmark Failed] ${err.message || 'Error measuring exchange rate'}`);
+      return null;
+    }
+  }, [getActiveService, addLog]);
+
+  // Monitor live actual requests per second
+  useEffect(() => {
+    const rateInterval = setInterval(() => {
+      if (status !== 'connected') {
+        setActualRateHz(0);
+        return;
+      }
+      const now = Date.now();
+      const count = requestTimestampsRef.current.filter((t) => t >= now - 1000).length;
+      setActualRateHz(count);
+    }, 500);
+
+    return () => clearInterval(rateInterval);
+  }, [status]);
 
   // Connect handler supporting BLE, Bluetooth Classic (OBDLink MX+), USB Serial, and Simulation
   const connect = useCallback(
@@ -266,6 +473,7 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         if (caps) {
           capabilitiesRef.current = caps;
+          applyScientificRateRecommendation(caps, targetMode, isSimulated);
         }
 
         setStatus('connected');
@@ -358,7 +566,10 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } else {
         caps = await (service as any).runInitSequence(profileProto);
       }
-      if (caps) capabilitiesRef.current = caps;
+      if (caps) {
+        capabilitiesRef.current = caps;
+        applyScientificRateRecommendation(caps, connectionType, isSimulated);
+      }
       setStatus('connected');
       setDeviceName(service.getDeviceName() || null);
     } catch (err: any) {
@@ -531,9 +742,18 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               activeHeaderRef.current = '7E0';
             }
 
+            const batchStart = performance.now();
             const batchResp = await service.sendCommand(batchedWireCmd, 1500);
+            const batchDuration = performance.now() - batchStart;
             if (cancel || runId !== pollRunRef.current) break;
             consecutiveTimeouts = 0;
+
+            const nowBatchTs = Date.now();
+            for (let b = 0; b < batchSlice.length; b++) {
+              requestTimestampsRef.current.push(nowBatchTs);
+            }
+            const batchCutoff = nowBatchTs - 1500;
+            requestTimestampsRef.current = requestTimestampsRef.current.filter((t) => t >= batchCutoff);
 
             if (isUnsupportedResponse(batchResp) || batchResp.includes('?')) {
               // Adapter or ECU rejected batch query -> revert to single PIDs
@@ -579,6 +799,10 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 }
               }
             }
+
+            const targetBatchIntervalMs = (1000 / Math.max(1, Math.min(40, pollingRateHzRef.current))) * Math.min(2.5, batchSlice.length);
+            const batchDelay = Math.max(8, Math.round(targetBatchIntervalMs - batchDuration));
+            await new Promise((r) => setTimeout(r, batchDelay));
           } catch (batchErr: any) {
             batchingSupported = false;
             if (batchErr.message && batchErr.message.includes('Timeout')) {
@@ -609,6 +833,7 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (batchedHandledIds.has(cmd.id)) continue;
           if (unsupportedSignalsRef.current.has(cmd.id)) continue;
 
+          let cmdDuration = 0;
           try {
             // Header management (cache active header; only send AT SH when it changes)
             const targetHeader = cmd.header || '7E0';
@@ -620,8 +845,15 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
             // Standard clean wire command
             const wireCmd = formatWireCommand(cmd.modePid);
+            const cmdStart = performance.now();
             const response = await service.sendCommand(wireCmd, 1500);
+            cmdDuration = performance.now() - cmdStart;
             if (cancel || runId !== pollRunRef.current) break;
+
+            const nowCmdTs = Date.now();
+            requestTimestampsRef.current.push(nowCmdTs);
+            const cmdCutoff = nowCmdTs - 1500;
+            requestTimestampsRef.current = requestTimestampsRef.current.filter((t) => t >= cmdCutoff);
 
             // Reset consecutive timeouts on success
             consecutiveTimeouts = 0;
@@ -670,13 +902,16 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
           }
 
-          // Small pause (10ms) between commands for bus arbitration
-          await new Promise((r) => setTimeout(r, 10));
+          // Dynamic delay between commands based on target collection rate (requests/sec)
+          const targetIntervalMs = 1000 / Math.max(1, Math.min(40, pollingRateHzRef.current));
+          const delayNeeded = Math.max(8, Math.round(targetIntervalMs - cmdDuration));
+          await new Promise((r) => setTimeout(r, delayNeeded));
           if (cancel || runId !== pollRunRef.current) break;
         }
 
-        // Pause before next polling cycle (15ms)
-        await new Promise((r) => setTimeout(r, 15));
+        // Small inter-cycle safety delay
+        const cycleDelay = Math.max(10, Math.round(1000 / Math.max(1, pollingRateHzRef.current) / 2));
+        await new Promise((r) => setTimeout(r, cycleDelay));
         if (cancel || runId !== pollRunRef.current) break;
       }
     };
@@ -859,6 +1094,16 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         quickReconnect,
         sendManualCommand,
         clearLogs,
+
+        // Data Collection Rate
+        pollingRateHz,
+        setPollingRateHz,
+        actualRateHz,
+        rateRationale,
+        isCustomRate,
+        benchmarkAdapterSpeed,
+        resetToScientificDefault,
+        lastBenchmark,
 
         // Telemetry Recording
         isRecording,

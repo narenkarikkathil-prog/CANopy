@@ -19,7 +19,10 @@ export const AppContent: React.FC = () => {
 
       {/* Main Content Area */}
       <div className="canopy-main-wrapper">
-        <TopHeader activeTab={activeTab} />
+        <TopHeader
+          activeTab={activeTab}
+          onNavigateToConnection={() => setActiveTab('ble')}
+        />
         <main className="canopy-content-container">
           {activeTab === 'dashboard' && <DashboardView />}
           {activeTab === 'commands' && <CommandsView />}
