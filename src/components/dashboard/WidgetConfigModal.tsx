@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import type { WidgetConfig, WidgetType, GaugeAccent, PrecisionOption } from '../../types/telemetry';
 import { GAUGE_ACCENT_COLORS } from '../../types/telemetry';
 import { useVehicle } from '../../context/VehicleContext';
-import { IconX, IconCheck } from '@tabler/icons-react';
+import { IconX, IconCheck, IconSearch } from '@tabler/icons-react';
 import {
   findCommandForWidget,
   getConvertibleUnitOptions,
@@ -33,6 +33,13 @@ export const WidgetConfigModal: React.FC<WidgetConfigModalProps> = ({
     resolvedInitialCmd?.id || widget?.signalSourceId || availableCommands[0]?.id || ''
   );
 
+  // Search & Filter state for Signal Source
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('All');
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const selectedItemRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
   // Precision and Unit options
   const [precision, setPrecision] = useState<PrecisionOption>(widget?.precision || 'auto');
   const [unitOverride, setUnitOverride] = useState<string>(widget?.unitOverride || '');
@@ -62,17 +69,74 @@ export const WidgetConfigModal: React.FC<WidgetConfigModalProps> = ({
     widget?.yAxisMax ?? selectedCmd?.maxVal ?? 100
   );
 
-  const categories = React.useMemo(() => {
-    const map = new Map<string, typeof availableCommands>();
+  // Auto-focus search input when opening to add a new widget
+  useEffect(() => {
+    if (isOpen && !widget) {
+      const timer = setTimeout(() => {
+        searchInputRef.current?.focus();
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [isOpen, widget]);
+
+  // Scroll active item into view on open
+  useEffect(() => {
+    if (isOpen && selectedItemRef.current && listRef.current) {
+      selectedItemRef.current.scrollIntoView({ block: 'nearest' });
+    }
+  }, [isOpen]);
+
+  const { categories, categoryCounts } = useMemo(() => {
+    const set = new Set<string>();
+    const counts: Record<string, number> = { All: availableCommands.length };
     for (const c of availableCommands) {
       const cat = c.category || (c.isCustom ? 'Custom Signals' : 'General');
-      if (!map.has(cat)) map.set(cat, []);
-      map.get(cat)!.push(c);
+      set.add(cat);
+      counts[cat] = (counts[cat] || 0) + 1;
     }
-    return map;
+    return {
+      categories: ['All', ...Array.from(set).sort()],
+      categoryCounts: counts,
+    };
   }, [availableCommands]);
 
-  const convertibleUnits = React.useMemo(() => {
+  const filteredCommands = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const queryTokens = q ? q.split(/\s+/).filter(Boolean) : [];
+
+    return availableCommands.filter((c) => {
+      // Category filter
+      if (selectedCategory !== 'All') {
+        const cat = c.category || (c.isCustom ? 'Custom Signals' : 'General');
+        if (cat !== selectedCategory) return false;
+      }
+
+      if (queryTokens.length === 0) return true;
+
+      const cleanPid = (c.modePid || '').replace(/\s+/g, '').toLowerCase();
+      const rawPid = (c.modePid || '').toLowerCase();
+      const name = (c.commandName || '').toLowerCase();
+      const units = (c.units || '').toLowerCase();
+      const cat = (c.category || (c.isCustom ? 'custom signals' : 'general')).toLowerCase();
+      const desc = (c.description || '').toLowerCase();
+      const vehicle = (c.vehicleName || '').toLowerCase();
+
+      return queryTokens.every((token) => {
+        const cleanToken = token.replace(/\s+/g, '');
+        return (
+          name.includes(token) ||
+          cleanPid.includes(cleanToken) ||
+          rawPid.includes(token) ||
+          units.includes(token) ||
+          cat.includes(token) ||
+          desc.includes(token) ||
+          vehicle.includes(token)
+        );
+      });
+    });
+  }, [availableCommands, searchQuery, selectedCategory]);
+
+  const convertibleUnits = useMemo(() => {
     return getConvertibleUnitOptions(selectedCmd?.units);
   }, [selectedCmd?.units]);
 
@@ -87,6 +151,25 @@ export const WidgetConfigModal: React.FC<WidgetConfigModalProps> = ({
       setScaleMax(cmd.maxVal);
       setYAxisMin(cmd.minVal);
       setYAxisMax(cmd.maxVal);
+    }
+  };
+
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.nativeEvent.isComposing) return;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      // If there are filtered commands, select the first matching command if not already selected
+      if (filteredCommands.length > 0) {
+        const isInList = filteredCommands.some((c) => c.id === signalSourceId);
+        if (!isInList) {
+          handleSourceChange(filteredCommands[0].id);
+        }
+      }
+    } else if (e.key === 'Escape') {
+      if (searchQuery) {
+        e.preventDefault();
+        setSearchQuery('');
+      }
     }
   };
 
@@ -162,27 +245,179 @@ export const WidgetConfigModal: React.FC<WidgetConfigModalProps> = ({
             </div>
           </div>
 
-          {/* Signal Source Dropdown */}
-          <div className="form-group">
-            <label className="form-label" htmlFor="signal-source-select">
-              Signal Source
-            </label>
-            <select
-              id="signal-source-select"
-              value={signalSourceId}
-              onChange={(e) => handleSourceChange(e.target.value)}
-              required
+          {/* Signal Source Search & Selection */}
+          <div className="form-group signal-source-picker">
+            <div className="form-row-header">
+              <label className="form-label" htmlFor="signal-search-input">
+                Signal Source
+              </label>
+            </div>
+
+            {/* Selected Signal Preview Card */}
+            {selectedCmd && (
+              <div className="signal-selected-card">
+                <div className="signal-selected-info">
+                  <span className="signal-selected-label">Current Selection</span>
+                  <div className="signal-selected-name">{selectedCmd.commandName}</div>
+                  <div className="signal-selected-meta">
+                    <span className="signal-pid-badge">{selectedCmd.modePid}</span>
+                    {selectedCmd.units && (
+                      <span className="signal-unit-badge">
+                        {unitOverride || selectedCmd.units}
+                      </span>
+                    )}
+                    {selectedCmd.category && (
+                      <span className="signal-cat-badge">{selectedCmd.category}</span>
+                    )}
+                    <span>
+                      Range: {scaleMin} to {scaleMax} {unitOverride || selectedCmd.units || ''}
+                    </span>
+                  </div>
+                </div>
+                <div className="signal-check-icon" title="Selected" aria-hidden="true">
+                  <IconCheck size={14} stroke={3} />
+                </div>
+              </div>
+            )}
+
+            {/* Search Input */}
+            <div className="signal-search-wrapper">
+              <IconSearch size={16} className="search-icon" aria-hidden="true" />
+              <input
+                ref={searchInputRef}
+                id="signal-search-input"
+                type="text"
+                className="signal-search-input"
+                placeholder="Search signals by name, PID (e.g. 010C), or unit..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={handleSearchKeyDown}
+                autoComplete="off"
+                aria-label="Search available data signals"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  className="signal-search-clear-btn"
+                  onClick={() => setSearchQuery('')}
+                  aria-label="Clear search query"
+                >
+                  <IconX size={14} />
+                </button>
+              )}
+            </div>
+
+            {/* Category Filter Pills */}
+            {categories.length > 2 && (
+              <div className="signal-category-pills" role="tablist" aria-label="Signal Categories">
+                {categories.map((cat) => (
+                  <button
+                    key={cat}
+                    type="button"
+                    className={`category-pill ${selectedCategory === cat ? 'active' : ''}`}
+                    onClick={() => setSelectedCategory(cat)}
+                    role="tab"
+                    aria-selected={selectedCategory === cat}
+                  >
+                    {cat} {categoryCounts[cat] !== undefined ? `(${categoryCounts[cat]})` : ''}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Results Status / Count */}
+            <div className="signal-results-bar">
+              <span>
+                {filteredCommands.length === availableCommands.length
+                  ? `All ${availableCommands.length} signals`
+                  : `Showing ${filteredCommands.length} of ${availableCommands.length} signals`}
+              </span>
+              {searchQuery && (
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  style={{ fontSize: '11px', padding: '2px 6px', textDecoration: 'underline' }}
+                  onClick={() => {
+                    setSearchQuery('');
+                    setSelectedCategory('All');
+                  }}
+                >
+                  Reset filters
+                </button>
+              )}
+            </div>
+
+            {/* Interactive Signals List */}
+            <div
+              ref={listRef}
+              className="signal-options-list"
+              role="listbox"
+              aria-label="Select a signal source"
             >
-              {Array.from(categories.entries()).map(([catName, cmds]) => (
-                <optgroup key={catName} label={catName}>
-                  {cmds.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.commandName} ({c.modePid}) {c.units ? `— ${c.units}` : ''}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
+              {filteredCommands.length > 0 ? (
+                filteredCommands.map((c) => {
+                  const isSelected = c.id === signalSourceId;
+                  return (
+                    <div
+                      key={c.id}
+                      ref={isSelected ? selectedItemRef : undefined}
+                      role="option"
+                      aria-selected={isSelected}
+                      tabIndex={0}
+                      className={`signal-option-item ${isSelected ? 'selected' : ''}`}
+                      onClick={() => handleSourceChange(c.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          handleSourceChange(c.id);
+                        }
+                      }}
+                    >
+                      <div className="signal-option-main">
+                        <div className="signal-option-name">{c.commandName}</div>
+                        <div className="signal-option-badges">
+                          <span className="signal-pid-badge">{c.modePid}</span>
+                          {c.units && <span className="signal-unit-badge">{c.units}</span>}
+                          {c.category && (
+                            <span className="signal-cat-badge">{c.category}</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="signal-option-aside">
+                        <span className="signal-option-range">
+                          {c.minVal} – {c.maxVal} {c.units || ''}
+                        </span>
+                        {isSelected && (
+                          <div className="signal-check-icon" aria-hidden="true">
+                            <IconCheck size={14} stroke={3} />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="signal-options-empty">
+                  <IconSearch size={22} className="signal-empty-icon" />
+                  <p className="signal-empty-text">
+                    No signals matched "<strong>{searchQuery}</strong>"
+                  </p>
+                  <p className="signal-empty-subtext">
+                    Try searching for terms like "RPM", "Speed", "Coolant", or PID "010C"
+                  </p>
+                  <button
+                    type="button"
+                    className="btn-ghost signal-clear-btn"
+                    onClick={() => {
+                      setSearchQuery('');
+                      setSelectedCategory('All');
+                    }}
+                  >
+                    Clear search filters
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Unit of Measure Conversion Toggle (e.g. km/h vs mph, °C vs °F, psi vs bar vs kPa) */}

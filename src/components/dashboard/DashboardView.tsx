@@ -5,6 +5,7 @@ import { useBLE } from '../../context/BLEContext';
 import { WidgetCard } from './WidgetCard';
 import { WidgetConfigModal } from './WidgetConfigModal';
 import { CustomCommandDrawer } from './CustomCommandDrawer';
+import { TelemetryRecordingBar } from './TelemetryRecordingBar';
 import { IconPlus } from '@tabler/icons-react';
 import type { WidgetConfig } from '../../types/telemetry';
 import { findCommandForWidget } from '../../services/widgetResolver';
@@ -47,6 +48,9 @@ export const DashboardView: React.FC = () => {
 
   return (
     <div className="dashboard-container">
+      {/* Telemetry Recording Control Bar */}
+      <TelemetryRecordingBar />
+
       {/* 5-Slot Responsive Widget Grid */}
       <div className="widget-grid" role="region" aria-label="Telemetry Widgets Grid">
         {slots.map((widget, slotIdx) => {

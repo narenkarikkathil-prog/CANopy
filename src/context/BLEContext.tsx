@@ -12,6 +12,11 @@ import { validateCommandSafety, decodeOBDbSignal } from '../services/obdbParser'
 import { evaluateFormula } from '../services/formulaParser';
 import { findCommandForWidget } from '../services/widgetResolver';
 import { VEHICLE_DEFINITIONS } from '../data/defaultVehicles';
+import {
+  type TelemetrySample,
+  generateTelemetryCSV,
+  downloadCSV,
+} from '../services/telemetryRecorder';
 
 interface BLEContextType {
   status: BLEConnectionStatus;
@@ -39,6 +44,17 @@ interface BLEContextType {
   quickReconnect: () => Promise<void>;
   sendManualCommand: (cmd: string) => Promise<string>;
   clearLogs: () => void;
+
+  // Telemetry Recording & CSV Export
+  isRecording: boolean;
+  recordingDuration: number;
+  recordedSamplesCount: number;
+  recordedChannelsCount: number;
+  startRecording: () => void;
+  stopRecording: () => void;
+  deleteRecording: () => void;
+  startNewRecording: () => void;
+  exportRecordingCSV: () => void;
 }
 
 const BLEContext = createContext<BLEContextType | null>(null);
@@ -95,6 +111,18 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [batteryGuardActive, setBatteryGuardActive] = useState<boolean>(false);
   const [batteryVoltage12V, setBatteryVoltage12V] = useState<number | null>(null);
   const [unsupportedSignals, setUnsupportedSignals] = useState<Set<string>>(new Set());
+
+  // Telemetry Recording State & Refs
+  const [isRecording, setIsRecording] = useState<boolean>(false);
+  const [recordingDuration, setRecordingDuration] = useState<number>(0);
+  const [recordedSamplesCount, setRecordedSamplesCount] = useState<number>(0);
+  const [recordedChannelsCount, setRecordedChannelsCount] = useState<number>(0);
+
+  const isRecordingRef = useRef<boolean>(false);
+  const recordedSamplesRef = useRef<TelemetrySample[]>([]);
+  const recordingStartTimeRef = useRef<number | null>(null);
+  const currentSnapshotRef = useRef<Record<string, number>>({});
+  const recordingTimerRef = useRef<any>(null);
 
   const bleServiceRef = useRef<BLEService | null>(null);
   const serialServiceRef = useRef<SerialOBDService | null>(null);
@@ -655,6 +683,27 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const publishTelemetry = (cmdId: string, val: number) => {
       const now = Date.now();
+      currentSnapshotRef.current[cmdId] = val;
+
+      if (isRecordingRef.current) {
+        if (!recordingStartTimeRef.current) {
+          recordingStartTimeRef.current = now;
+        }
+        const cmd = availableCommandsRef.current.find((c) => c.id === cmdId);
+        const sample: TelemetrySample = {
+          timestamp: now,
+          isoTime: new Date(now).toISOString(),
+          elapsedSeconds: (now - recordingStartTimeRef.current) / 1000,
+          cmdId,
+          commandName: cmd?.commandName || cmdId,
+          modePid: cmd?.modePid || '',
+          units: cmd?.units || '',
+          value: val,
+          snapshot: { ...currentSnapshotRef.current },
+        };
+        recordedSamplesRef.current.push(sample);
+      }
+
       setLiveValues((prev) => {
         const updated = { ...prev, [cmdId]: val };
         widgets.forEach((w, idx) => {
@@ -689,6 +738,99 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [status, widgets, isDrawerOpen, availableCommands, getActiveService, addLog, disconnect]);
 
+  // Telemetry Recording Controls
+  const startRecording = useCallback(() => {
+    isRecordingRef.current = true;
+    setIsRecording(true);
+
+    if (recordingStartTimeRef.current === null) {
+      recordingStartTimeRef.current = Date.now();
+      setRecordingDuration(0);
+    }
+
+    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+
+    recordingTimerRef.current = setInterval(() => {
+      if (recordingStartTimeRef.current) {
+        const elapsed = Math.floor((Date.now() - recordingStartTimeRef.current) / 1000);
+        setRecordingDuration(elapsed);
+        setRecordedSamplesCount(recordedSamplesRef.current.length);
+        const uniqueChannels = new Set(recordedSamplesRef.current.map((s) => s.cmdId)).size;
+        setRecordedChannelsCount(uniqueChannels);
+      }
+    }, 1000);
+
+    addLog('info', '[Logger] Telemetry recording started.');
+  }, [addLog]);
+
+  const stopRecording = useCallback(() => {
+    isRecordingRef.current = false;
+    setIsRecording(false);
+
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+
+    if (recordingStartTimeRef.current) {
+      const elapsed = Math.floor((Date.now() - recordingStartTimeRef.current) / 1000);
+      setRecordingDuration(elapsed);
+    }
+    setRecordedSamplesCount(recordedSamplesRef.current.length);
+    const uniqueChannels = new Set(recordedSamplesRef.current.map((s) => s.cmdId)).size;
+    setRecordedChannelsCount(uniqueChannels);
+
+    addLog('info', `[Logger] Telemetry recording stopped (${recordedSamplesRef.current.length} samples collected).`);
+  }, [addLog]);
+
+  const deleteRecording = useCallback(() => {
+    isRecordingRef.current = false;
+    setIsRecording(false);
+
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+
+    recordedSamplesRef.current = [];
+    recordingStartTimeRef.current = null;
+    currentSnapshotRef.current = {};
+    setRecordingDuration(0);
+    setRecordedSamplesCount(0);
+    setRecordedChannelsCount(0);
+
+    addLog('info', '[Logger] Telemetry recording deleted.');
+  }, [addLog]);
+
+  const startNewRecording = useCallback(() => {
+    deleteRecording();
+    setTimeout(() => {
+      startRecording();
+    }, 50);
+  }, [deleteRecording, startRecording]);
+
+  const exportRecordingCSV = useCallback(() => {
+    const samples = recordedSamplesRef.current;
+    if (samples.length === 0) {
+      addLog('info', '[Logger] Cannot export: no telemetry samples recorded.');
+      return;
+    }
+
+    const csvContent = generateTelemetryCSV(samples, availableCommandsRef.current);
+    const dateStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const vName = (activeVehicle?.name || 'Vehicle').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const fileName = `canopy_telemetry_${vName}_${dateStr}.csv`;
+
+    downloadCSV(csvContent, fileName);
+    addLog('info', `[Logger] Exported ${samples.length} telemetry samples to ${fileName}.`);
+  }, [activeVehicle, addLog]);
+
+  useEffect(() => {
+    return () => {
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    };
+  }, []);
+
   return (
     <BLEContext.Provider
       value={{
@@ -717,6 +859,17 @@ export const BLEProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         quickReconnect,
         sendManualCommand,
         clearLogs,
+
+        // Telemetry Recording
+        isRecording,
+        recordingDuration,
+        recordedSamplesCount,
+        recordedChannelsCount,
+        startRecording,
+        stopRecording,
+        deleteRecording,
+        startNewRecording,
+        exportRecordingCSV,
       }}
     >
       {children}

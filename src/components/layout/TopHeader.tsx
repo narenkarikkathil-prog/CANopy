@@ -2,6 +2,7 @@ import React from 'react';
 import { useVehicle } from '../../context/VehicleContext';
 import { useBLE } from '../../context/BLEContext';
 import { IconCar, IconRefresh, IconBatteryCharging } from '@tabler/icons-react';
+import { formatRecordingDuration } from '../../services/telemetryRecorder';
 import type { NavTab } from './AppNav';
 
 interface TopHeaderProps {
@@ -17,7 +18,14 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ activeTab }) => {
     setSelectedYear,
     availableYears,
   } = useVehicle();
-  const { status, quickReconnect, isSimulated, batteryGuardActive } = useBLE();
+  const {
+    status,
+    quickReconnect,
+    isSimulated,
+    batteryGuardActive,
+    isRecording,
+    recordingDuration,
+  } = useBLE();
 
   const getStatusConfig = () => {
     switch (status) {
@@ -64,7 +72,15 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ activeTab }) => {
         <h1 className="header-title serif-heading">{getPageTitle()}</h1>
       </div>
 
-      <div className="header-right">
+      <div className="header-status-area">
+        {/* Active Telemetry Recording Indicator */}
+        {isRecording && (
+          <div className="header-recording-indicator" title="Telemetry recording in progress">
+            <span className="header-recording-dot" />
+            <span>REC {formatRecordingDuration(recordingDuration)}</span>
+          </div>
+        )}
+
         {/* 12V Battery Guard Indicator */}
         {batteryGuardActive && (
           <div className="battery-guard-indicator" title="12V battery voltage is low. Polling paused to prevent drain.">
@@ -73,6 +89,25 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ activeTab }) => {
           </div>
         )}
 
+        {/* Minimalist BLE Status: small status dot + muted text */}
+        <button
+          type="button"
+          id="ble-status-badge"
+          className="ble-status-minimal"
+          onClick={quickReconnect}
+          title="Tap to quick-reconnect OBD-II adapter"
+          aria-label={`BLE Status: ${statusConfig.label}. Tap to quick-reconnect.`}
+        >
+          <span
+            className={`ble-status-dot ${statusConfig.pulse ? 'ble-pulse' : ''}`}
+            style={{ backgroundColor: statusConfig.dotColor }}
+          />
+          <span className="ble-status-label">{statusConfig.label}</span>
+          <IconRefresh size={12} className="reconnect-hint-icon" />
+        </button>
+      </div>
+
+      <div className="header-selectors-area">
         {/* Simplified clean white rounded vehicle dropdown */}
         <div className="vehicle-selector-wrapper">
           <IconCar size={16} className="vehicle-icon" />
@@ -112,23 +147,6 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ activeTab }) => {
             </select>
           </div>
         )}
-
-        {/* Minimalist BLE Status: small status dot + muted text */}
-        <button
-          type="button"
-          id="ble-status-badge"
-          className="ble-status-minimal"
-          onClick={quickReconnect}
-          title="Tap to quick-reconnect OBD-II adapter"
-          aria-label={`BLE Status: ${statusConfig.label}. Tap to quick-reconnect.`}
-        >
-          <span
-            className={`ble-status-dot ${statusConfig.pulse ? 'ble-pulse' : ''}`}
-            style={{ backgroundColor: statusConfig.dotColor }}
-          />
-          <span className="ble-status-label">{statusConfig.label}</span>
-          <IconRefresh size={12} className="reconnect-hint-icon" />
-        </button>
       </div>
     </header>
   );
