@@ -11,10 +11,13 @@ import {
   IconBrandApple,
   IconBrandAndroid,
   IconBrandWindows,
+  IconActivity,
+  IconCpu,
+  IconAlertTriangle,
 } from '@tabler/icons-react';
 
 export const HelpView: React.FC = () => {
-  const [subTab, setSubTab] = useState<'connection' | 'csv' | 'database'>('connection');
+  const [subTab, setSubTab] = useState<'connection' | 'csv' | 'database' | 'telemetry'>('connection');
 
   const handleDownloadTemplate = () => {
     const csvContent = [
@@ -65,6 +68,13 @@ export const HelpView: React.FC = () => {
             onClick={() => setSubTab('database')}
           >
             Database &amp; Safety
+          </button>
+          <button
+            type="button"
+            className={subTab === 'telemetry' ? 'active' : ''}
+            onClick={() => setSubTab('telemetry')}
+          >
+            Telemetry &amp; Polling
           </button>
         </div>
       </div>
@@ -477,6 +487,92 @@ export const HelpView: React.FC = () => {
                 <span className="download-hint">
                   Learn more or contribute signal sets at <a href="https://github.com/OBDb" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'underline' }}>github.com/OBDb</a> and <a href="https://obdb.community" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'underline' }}>obdb.community</a>.
                 </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* =========================================================================
+            SUBTAB 4: TELEMETRY & POLLING
+            ========================================================================= */}
+        {subTab === 'telemetry' && (
+          <div className="card help-card">
+            <div className="help-card-header">
+              <IconActivity size={22} className="help-header-icon" />
+              <div>
+                <h2 className="section-title serif-heading">Telemetry Recording &amp; Polling Rate Guide</h2>
+                <p className="section-subtitle">
+                  Data collection frequency, scientific benchmarking, and session CSV logging
+                </p>
+              </div>
+            </div>
+
+            <div className="guide-content">
+              {/* Telemetry Recording Section */}
+              <div className="guide-step-block">
+                <h3 className="guide-step-title">1. Live Telemetry Session Recording</h3>
+                <p className="guide-text">
+                  Canopy features an integrated, high-resolution session recorder located in the control bar at the top of the <strong>Dashboard</strong>.
+                </p>
+                <ul className="guide-instructions-list">
+                  <li>
+                    <strong>Start / Stop Recording</strong>: Click <strong>Record Session</strong> to capture incoming vehicle sensor values. A live timer and sample counter track the session duration.
+                  </li>
+                  <li>
+                    <strong>Global Recording Indicator</strong>: When recording is active, a persistent <code>REC 00:00:00</code> pill is visible in the top header across every page.
+                  </li>
+                  <li>
+                    <strong>RFC-4180 CSV Export</strong>: Click <strong>Export CSV</strong> to save your driving session. The file includes ISO 8601 UTC timestamps, elapsed seconds, millisecond precision, triggered signals, and snapshot columns for each logged channel.
+                  </li>
+                </ul>
+              </div>
+
+              {/* Data Collection Rate Section */}
+              <div className="guide-step-block">
+                <h3 className="guide-step-title">2. Data Collection Rate (Polling Frequency)</h3>
+                <p className="guide-text">
+                  On the <strong>Connection</strong> page, you can configure how many times per second (Hz) Canopy queries the OBD adapter for live vehicle data:
+                </p>
+                <ul className="guide-instructions-list">
+                  <li>
+                    <strong>2 Hz (Eco / Battery Saver)</strong>: 1 request every ~500 ms. Minimizes vehicle bus traffic and mobile CPU usage.
+                  </li>
+                  <li>
+                    <strong>5 Hz (Conservative)</strong>: 1 request every ~200 ms. Recommended for legacy protocols (J1850 / ISO 9141) or older ECUs.
+                  </li>
+                  <li>
+                    <strong>10 Hz (Default)</strong>: 1 request every ~100 ms. The gold standard for modern ISO 15765-4 CAN vehicles and standard BLE adapters.
+                  </li>
+                  <li>
+                    <strong>15 Hz (Fast)</strong>: 1 request every ~66 ms. Fast updates for dynamic sensors like RPM, throttle, and battery current.
+                  </li>
+                  <li>
+                    <strong>20 Hz (STN / Ultra)</strong>: 1 request every 50 ms. Designed for high-speed STN processors (OBDLink MX+, vLinker) with deep hardware FIFOs.
+                  </li>
+                </ul>
+              </div>
+
+              {/* Scientific Auto-Detection & Benchmarking */}
+              <div className="guide-step-block">
+                <h3 className="guide-step-title">
+                  <IconCpu size={18} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+                  3. Scientific Hardware Auto-Tuning &amp; Latency Benchmarking
+                </h3>
+                <p className="guide-text">
+                  Canopy uses a scientific profiling engine during connection to configure the optimal polling rate for your specific adapter hardware:
+                </p>
+                <ul className="guide-instructions-list">
+                  <li>
+                    <strong>Hardware Identification</strong>: Adapters with confirmed 32-bit STN processors are automatically enabled for 20 req/s, while standard ELM327 BLE adapters default to certified 10 req/s to prevent BLE GATT notification drops.
+                  </li>
+                  <li>
+                    <strong>Live Benchmark Tool</strong>: Click <strong>Benchmark Adapter Speed</strong> on the Connection page to test real-world round-trip latency over 3 sample probes. Canopy computes the physical max throughput and sets a safe rate with 25% bus arbitration headroom.
+                  </li>
+                  <li>
+                    <IconAlertTriangle size={15} style={{ verticalAlign: 'middle', marginRight: 4, color: '#C98A3B' }} />
+                    <strong>High Rate Warning</strong>: Rates exceeding 12–15 req/s on low-cost ELM327 clones may saturate adapter memory buffers. If live gauges stutter or freeze, reduce the rate to 5–10 req/s.
+                  </li>
+                </ul>
               </div>
             </div>
           </div>
